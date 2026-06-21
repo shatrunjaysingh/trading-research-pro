@@ -350,6 +350,15 @@ docker exec -it trading_db psql -U trading_user -d trading_research
 Deploy the full stack for free using Render (backend), Vercel (frontend), and Neon (PostgreSQL).
 No custom domain required — both platforms provide free subdomains.
 
+### Live URLs
+
+| Service | URL |
+|---|---|
+| Frontend | https://trading-research-pro.vercel.app |
+| Backend API | https://trading-research-pro-api.onrender.com |
+| Health check | https://trading-research-pro-api.onrender.com/health |
+| API docs | https://trading-research-pro-api.onrender.com/docs |
+
 ### Architecture
 
 ```
@@ -357,7 +366,7 @@ Browser
   └── https://trading-research-pro.vercel.app   (Vercel — React frontend)
         └── VITE_API_URL → https://trading-research-pro-api.onrender.com
               └── FastAPI backend (Render — Docker web service)
-                    └── DATABASE_URL → Neon serverless PostgreSQL
+                    └── DATABASE_URL → Render PostgreSQL (oregon region)
 ```
 
 ### Limitations of free tiers
@@ -388,17 +397,20 @@ git push -u origin main
 
 ---
 
-### Step 2 — Neon (PostgreSQL)
+### Step 2 — Database
 
-1. Sign up at **neon.tech** (free, no credit card)
-2. Click **New Project** → choose a region close to your Render region
-3. Copy the **Connection String** — it looks like:
-   ```
-   postgresql://trading_user:<password>@ep-xxx.us-east-2.aws.neon.tech/trading_research?sslmode=require
-   ```
-4. Keep this for the Render setup in Step 3
+Render's Blueprint (`render.yaml`) automatically creates a free PostgreSQL database named `trading-research-pro-db` in the same region as the web service. No manual setup needed.
 
-> The app runs `init_db()` on startup and creates all tables automatically — no manual SQL needed.
+After the Blueprint deploys, go to **Render → trading-research-pro-db → Info** to find:
+- **Internal URL** — used by the backend (already wired via `render.yaml`)
+- **External URL** — use this to connect from your local machine (e.g. with `psql`)
+
+> The app runs `init_db()` on startup and creates all tables and the default admin user automatically.
+
+> **Note:** Render's free PostgreSQL expires after 90 days. Export your data before then with:
+> ```bash
+> pg_dump "<external-db-url>" > backup.sql
+> ```
 
 ---
 
@@ -493,7 +505,7 @@ git push origin main
 
 | Variable | Where set | Description |
 |---|---|---|
-| `DATABASE_URL` | Render | Neon PostgreSQL connection string |
+| `DATABASE_URL` | Render (auto) | Set automatically by Blueprint from the Render PostgreSQL service |
 | `SECRET_KEY` | Render | JWT signing secret (generate randomly) |
 | `ANTHROPIC_API_KEY` | Render | Claude AI for stock analysis |
 | `POLYGON_API_KEY` | Render | Real-time price data |
@@ -683,6 +695,11 @@ docker build -t trading-frontend ./frontend
 | `anthropic` not installed | Missing Python package | `pip3 install anthropic --break-system-packages` |
 | Email fails to send | Wrong Gmail credential | Use a Gmail **App Password** (16-char), not account password; requires 2FA enabled |
 | `SyntaxError` in app.py | Nested f-string escape chars | Fixed — `app.py` compiles clean on Python 3.12+ |
+| Render build fails: `ModuleNotFoundError: No module named 'sentiment'` | `sentiment.py` missing from Dockerfile COPY | Fixed — added `sentiment.py` to `COPY` line in `backend/Dockerfile` |
+| Login fails on Vercel after deploy | `CORS_ORIGINS_RAW` not set or Render not redeployed yet | Set `CORS_ORIGINS_RAW=https://trading-research-pro.vercel.app` in Render env vars, then wait for redeploy |
+| Login fails — "Login failed" error | `VITE_API_URL` set after first Vercel build | Trigger a manual redeploy in Vercel after adding the env var so it gets baked into the JS bundle |
+| `psql` fails with "could not translate host name" | Using Render's internal DB hostname from outside | Use the **External Database URL** from Render → DB → Info (includes `.oregon-postgres.render.com`) |
+| `git push` fails with HTTP 400 | Default HTTP buffer too small for large repo | Run `git config http.postBuffer 524288000` then push again |
 
 ### Quick health check commands
 
