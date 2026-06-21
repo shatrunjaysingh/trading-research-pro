@@ -11,6 +11,7 @@ import { streamStockAnalysis, fetchStockHistory } from '../api/analysis'
 import {
   StockAnalysisResult, TechnicalSnapshot, FundamentalSnapshot,
   AnalystSnapshot, IndicatorKey, StockAnalysisRequest,
+  SecInsiderTransaction, SecInsiderSummary, SecRecentFiling,
 } from '../types'
 import { clsx } from 'clsx'
 import { InfoTooltip } from '../components/ui/InfoTooltip'
@@ -1720,6 +1721,112 @@ export function StockAnalysisPage() {
                           ))}
                         </tbody>
                       </table>
+                    </div>
+                  )}
+                </div>
+              )
+            })()}
+
+            {/* SEC EDGAR Insider Activity */}
+            {(() => {
+              const summary = result.sec_insider_summary
+              const txns    = result.sec_insider_transactions ?? []
+              const filings = result.sec_recent_filings ?? []
+              if (!summary && txns.length === 0 && filings.length === 0) return null
+              const sigLabel: Record<string, string> = {
+                strong_buy: 'Strong Buy Signal', buy: 'Buy Signal',
+                neutral: 'Neutral', weak_sell: 'Sell Signal', sell: 'Strong Sell Signal',
+              }
+              const sigColor: Record<string, string> = {
+                strong_buy: 'text-green-600', buy: 'text-green-500',
+                neutral: 'text-ink-muted', weak_sell: 'text-red-400', sell: 'text-red-600',
+              }
+              const sig = summary?.signal ?? 'neutral'
+              return (
+                <div className="bg-surface rounded-xl border border-surface-border p-4 space-y-4">
+                  <div className="text-sm font-semibold text-ink">SEC EDGAR — Insider Activity (Form 4)</div>
+
+                  {summary && (
+                    <div className="divide-y divide-surface-border/60">
+                      <div className="flex justify-between items-center py-2">
+                        <span className="text-sm text-ink-muted">Signal (90d)</span>
+                        <span className={`text-sm font-bold ${sigColor[sig] ?? 'text-ink-muted'}`}>{sigLabel[sig] ?? sig}</span>
+                      </div>
+                      <div className="flex justify-between items-center py-2">
+                        <span className="text-sm text-ink-muted">Open-Market Buys</span>
+                        <span className="text-sm font-semibold text-green-600">
+                          {summary.buy_count} txn · {summary.buy_shares >= 1e6 ? `${(summary.buy_shares / 1e6).toFixed(2)}M` : summary.buy_shares.toLocaleString()} sh
+                        </span>
+                      </div>
+                      <div className="flex justify-between items-center py-2">
+                        <span className="text-sm text-ink-muted">Open-Market Sales</span>
+                        <span className="text-sm font-semibold text-red-500">
+                          {summary.sell_count} txn · {summary.sell_shares >= 1e6 ? `${(summary.sell_shares / 1e6).toFixed(2)}M` : summary.sell_shares.toLocaleString()} sh
+                        </span>
+                      </div>
+                      <div className="flex justify-between items-center py-2">
+                        <span className="text-sm text-ink-muted">Net Shares (90d)</span>
+                        <span className={`text-sm font-bold ${summary.net_shares >= 0 ? 'text-green-600' : 'text-red-500'}`}>
+                          {summary.net_shares >= 0 ? '+' : ''}{summary.net_shares >= 1e6 ? `${(summary.net_shares / 1e6).toFixed(2)}M` : summary.net_shares.toLocaleString()}
+                        </span>
+                      </div>
+                    </div>
+                  )}
+
+                  {txns.length > 0 && (
+                    <div>
+                      <div className="text-xs font-semibold text-ink-muted uppercase tracking-wide mb-2">Recent Form 4 Transactions</div>
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-xs">
+                          <thead>
+                            <tr className="text-ink-faint border-b border-surface-border">
+                              <th className="text-left py-1.5 font-medium pr-2">Date</th>
+                              <th className="text-left py-1.5 font-medium pr-2">Owner</th>
+                              <th className="text-left py-1.5 font-medium pr-2">Role</th>
+                              <th className="text-left py-1.5 font-medium pr-2">Type</th>
+                              <th className="text-right py-1.5 font-medium pr-2">Shares</th>
+                              <th className="text-right py-1.5 font-medium">Value</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {txns.slice(0, 10).map((t: SecInsiderTransaction, i: number) => (
+                              <tr key={i} className="border-b border-surface-border/40 last:border-0">
+                                <td className="py-1.5 text-ink-muted pr-2 whitespace-nowrap">{t.date}</td>
+                                <td className="py-1.5 text-ink pr-2 max-w-[120px] truncate">{t.owner}</td>
+                                <td className="py-1.5 text-ink-muted pr-2 max-w-[80px] truncate">{t.role}</td>
+                                <td className={`py-1.5 font-semibold pr-2 ${t.code === 'P' ? 'text-green-600' : t.code === 'S' ? 'text-red-500' : 'text-ink-muted'}`}>
+                                  {t.type}
+                                </td>
+                                <td className="py-1.5 text-right text-ink pr-2">
+                                  {t.shares >= 1e6 ? `${(t.shares / 1e6).toFixed(2)}M` : t.shares.toLocaleString()}
+                                </td>
+                                <td className="py-1.5 text-right text-ink">
+                                  {t.value != null ? (t.value >= 1e6 ? `$${(t.value / 1e6).toFixed(2)}M` : `$${Math.round(t.value).toLocaleString()}`) : '—'}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
+
+                  {filings.length > 0 && (
+                    <div>
+                      <div className="text-xs font-semibold text-ink-muted uppercase tracking-wide mb-2">Recent SEC Filings</div>
+                      <div className="space-y-1.5">
+                        {filings.map((f: SecRecentFiling, i: number) => (
+                          <div key={i} className="flex items-center gap-3 py-1.5 border-b border-surface-border/40 last:border-0">
+                            <span className="text-xs font-bold bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300 px-1.5 py-0.5 rounded">{f.form}</span>
+                            <span className="text-xs text-ink-muted whitespace-nowrap">{f.date}</span>
+                            {f.description && <span className="text-xs text-ink truncate">{f.description}</span>}
+                            <a href={f.url} target="_blank" rel="noopener noreferrer"
+                              className="ml-auto text-xs text-blue-600 hover:text-blue-800 whitespace-nowrap flex-shrink-0">
+                              View ↗
+                            </a>
+                          </div>
+                        ))}
+                      </div>
                     </div>
                   )}
                 </div>

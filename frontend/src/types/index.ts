@@ -115,6 +115,9 @@ export interface FreePick {
   vol_prior_avg?: number | null
   vol_trend_pct?: number | null
   vol_signal?: string | null
+  // SEC EDGAR insider data
+  sec_insider_summary?: SecInsiderSummary | null
+  sec_recent_filings?: SecRecentFiling[]
 }
 
 export interface PriceBar {
@@ -374,6 +377,34 @@ export interface AnalystSnapshot {
   upside_pct: number | null
 }
 
+export interface SecInsiderTransaction {
+  date: string
+  filed_date: string
+  owner: string
+  role: string
+  code: string
+  type: string
+  shares: number
+  price: number | null
+  value: number | null
+}
+
+export interface SecInsiderSummary {
+  buy_count: number
+  sell_count: number
+  buy_shares: number
+  sell_shares: number
+  net_shares: number
+  signal: 'strong_buy' | 'buy' | 'neutral' | 'weak_sell' | 'sell'
+}
+
+export interface SecRecentFiling {
+  form: string
+  date: string
+  description: string
+  url: string
+}
+
 export interface InstitutionalHolder {
   holder: string
   shares: number | null
@@ -403,6 +434,9 @@ export interface StockAnalysisResult {
   fundamentals: FundamentalSnapshot | null
   analyst: AnalystSnapshot | null
   institutional: InstitutionalSnapshot | null
+  sec_insider_transactions?: SecInsiderTransaction[]
+  sec_insider_summary?: SecInsiderSummary | null
+  sec_recent_filings?: SecRecentFiling[]
   ai_analysis: string | null
   news_summary: string | null
   peer_comparison: Record<string, unknown>[] | null

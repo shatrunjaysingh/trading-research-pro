@@ -492,6 +492,8 @@ def _score_asset(asset: dict, spy_return_3m: float,
     insider_buys       = 0
     insider_sells      = 0
     inst_pct_held      = 0.0
+    sec_insider_summary: dict = {}
+    sec_recent_filings:  list = []
 
     if asset["type"] == "stock":
         try:
@@ -570,6 +572,26 @@ def _score_asset(asset: dict, spy_return_3m: float,
                         "selling" if inst_top10_sellers > inst_top10_buyers  else
                         "mixed"
                     )
+        except Exception:
+            pass
+
+        # SEC EDGAR Form 4 — supplement/override yfinance insider score
+        try:
+            from backend.services.sec_edgar import (
+                get_insider_transactions, summarise_insider_transactions, get_recent_filings
+            )
+            _txns = get_insider_transactions(asset["ticker"], days=90, max_filings=10)
+            sec_insider_summary = summarise_insider_transactions(_txns)
+            sec_recent_filings  = get_recent_filings(asset["ticker"])
+            if sec_insider_summary:
+                sig = sec_insider_summary.get("signal", "neutral")
+                insider_score = (
+                    85.0 if sig == "strong_buy" else
+                    70.0 if sig == "buy"        else
+                    22.0 if sig == "sell"       else
+                    33.0 if sig == "weak_sell"  else
+                    50.0
+                )
         except Exception:
             pass
 
@@ -764,6 +786,9 @@ def _score_asset(asset: dict, spy_return_3m: float,
         "inst_top10_buyers":    inst_top10_buyers,
         "inst_top10_sellers":   inst_top10_sellers,
         "inst_top10_signal":    inst_top10_signal,
+        # SEC EDGAR
+        "sec_insider_summary":  sec_insider_summary,
+        "sec_recent_filings":   sec_recent_filings,
         # score fields
         "raw_score":           raw_score,
         "regime_multiplier":   multiplier,

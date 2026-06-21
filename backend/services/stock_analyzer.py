@@ -867,9 +867,23 @@ def analyze_stock_sync(
     if include_fundamentals:
         result["analyst"] = _fetch_analyst_data(ticker, current_price)
         result["institutional"] = _fetch_institutional(ticker)
+        # SEC EDGAR Form 4 insider transactions
+        try:
+            from backend.services.sec_edgar import get_insider_transactions, summarise_insider_transactions, get_recent_filings
+            txns = get_insider_transactions(ticker, days=90, max_filings=10)
+            result["sec_insider_transactions"] = txns
+            result["sec_insider_summary"]      = summarise_insider_transactions(txns)
+            result["sec_recent_filings"]       = get_recent_filings(ticker)
+        except Exception:
+            result["sec_insider_transactions"] = []
+            result["sec_insider_summary"]      = {}
+            result["sec_recent_filings"]       = []
     else:
         result["analyst"] = None
         result["institutional"] = None
+        result["sec_insider_transactions"] = []
+        result["sec_insider_summary"]      = {}
+        result["sec_recent_filings"]       = []
 
     if include_peers:
         result["peer_comparison"] = _fetch_peers(ticker)

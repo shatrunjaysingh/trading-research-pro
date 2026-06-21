@@ -296,6 +296,64 @@ function FreePickDetail({ pick, sectorLabel }: { pick: FreePick; sectorLabel: st
         )}
       </div>
 
+      {/* SEC EDGAR insider summary */}
+      {pick.sec_insider_summary && pick.sec_insider_summary.buy_count + pick.sec_insider_summary.sell_count > 0 && (() => {
+        const s = pick.sec_insider_summary!
+        const sigLabel: Record<string, string> = {
+          strong_buy: 'Strong Buy', buy: 'Buy', neutral: 'Neutral',
+          weak_sell: 'Weak Sell', sell: 'Sell',
+        }
+        const sigColor: Record<string, string> = {
+          strong_buy: 'text-green-600', buy: 'text-green-500',
+          neutral: 'text-ink-muted', weak_sell: 'text-red-400', sell: 'text-red-600',
+        }
+        return (
+          <div className="bg-surface rounded-xl border border-surface-border p-3">
+            <SectionLabel>SEC EDGAR Insider Activity (Form 4, 90d)</SectionLabel>
+            <IndicatorRow
+              label="Signal"
+              value={sigLabel[s.signal] ?? s.signal}
+              noteColor={sigColor[s.signal] ?? 'text-ink-muted'}
+            />
+            <IndicatorRow
+              label="Buys"
+              value={`${s.buy_count} txn`}
+              note={s.buy_shares >= 1e6 ? `${(s.buy_shares / 1e6).toFixed(2)}M sh` : `${s.buy_shares.toLocaleString()} sh`}
+              noteColor="text-green-600"
+            />
+            <IndicatorRow
+              label="Sales"
+              value={`${s.sell_count} txn`}
+              note={s.sell_shares >= 1e6 ? `${(s.sell_shares / 1e6).toFixed(2)}M sh` : `${s.sell_shares.toLocaleString()} sh`}
+              noteColor="text-red-500"
+            />
+            <IndicatorRow
+              label="Net"
+              value={`${s.net_shares >= 0 ? '+' : ''}${s.net_shares >= 1e6 ? `${(s.net_shares / 1e6).toFixed(2)}M` : s.net_shares.toLocaleString()}`}
+              noteColor={s.net_shares >= 0 ? 'text-green-600' : 'text-red-500'}
+            />
+          </div>
+        )
+      })()}
+
+      {/* Recent SEC filings */}
+      {pick.sec_recent_filings && pick.sec_recent_filings.length > 0 && (
+        <div className="bg-surface rounded-xl border border-surface-border p-3">
+          <SectionLabel>Recent SEC Filings</SectionLabel>
+          <div className="space-y-1">
+            {pick.sec_recent_filings.slice(0, 5).map((f, i) => (
+              <div key={i} className="flex items-center gap-2 py-1 border-b border-surface-border/40 last:border-0">
+                <span className="text-[10px] font-bold bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300 px-1 py-0.5 rounded flex-shrink-0">{f.form}</span>
+                <span className="text-[10px] text-ink-muted whitespace-nowrap">{f.date}</span>
+                {f.description && <span className="text-[10px] text-ink truncate">{f.description}</span>}
+                <a href={f.url} target="_blank" rel="noopener noreferrer"
+                  className="ml-auto text-[10px] text-blue-600 hover:text-blue-800 whitespace-nowrap flex-shrink-0">↗</a>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       <div className="flex justify-end pt-1">
         <DownloadButton ticker={pick.ticker} pick={pick} mode="free" sectorLabel={sectorLabel} />
       </div>
