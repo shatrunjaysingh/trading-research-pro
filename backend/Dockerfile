@@ -7,7 +7,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends libpq-dev gcc &
 COPY backend/requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY database.py auth.py research.py config.yaml ./
+COPY database.py auth.py research.py sentiment.py config.yaml ./
 COPY backend/ ./backend/
 
 RUN adduser --disabled-password --gecos '' appuser && chown -R appuser /app
