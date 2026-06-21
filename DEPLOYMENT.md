@@ -1,6 +1,6 @@
-# TradingResearch Pro — Deployment & Reference Guide
+# Trading Research Pro — Deployment & Reference Guide
 
-Last updated: 2026-06-13
+Last updated: 2026-06-21
 
 ---
 
@@ -14,11 +14,12 @@ Last updated: 2026-06-13
 6. [License Tiers](#6-license-tiers)
 7. [Running Locally (Dev)](#7-running-locally-dev)
 8. [Running with Docker Compose](#8-running-with-docker-compose)
-9. [API Endpoints](#9-api-endpoints)
-10. [Frontend Pages](#10-frontend-pages)
-11. [RBAC — Roles & Permissions](#11-rbac--roles--permissions)
-12. [AWS Deployment Path](#12-aws-deployment-path)
-13. [Troubleshooting](#13-troubleshooting)
+9. [Free Cloud Deployment (Render + Vercel + Neon)](#9-free-cloud-deployment-render--vercel--neon)
+10. [API Endpoints](#10-api-endpoints)
+11. [Frontend Pages](#11-frontend-pages)
+12. [RBAC — Roles & Permissions](#12-rbac--roles--permissions)
+13. [AWS Deployment Path](#13-aws-deployment-path)
+14. [Troubleshooting](#14-troubleshooting)
 
 ---
 
@@ -344,9 +345,169 @@ docker exec -it trading_db psql -U trading_user -d trading_research
 
 ---
 
-## 9. API Endpoints
+## 9. Free Cloud Deployment (Render + Vercel + Neon)
 
-Base URL: `http://localhost:8000/api/v1`
+Deploy the full stack for free using Render (backend), Vercel (frontend), and Neon (PostgreSQL).
+No custom domain required — both platforms provide free subdomains.
+
+### Architecture
+
+```
+Browser
+  └── https://trading-research-pro.vercel.app   (Vercel — React frontend)
+        └── VITE_API_URL → https://trading-research-pro-api.onrender.com
+              └── FastAPI backend (Render — Docker web service)
+                    └── DATABASE_URL → Neon serverless PostgreSQL
+```
+
+### Limitations of free tiers
+
+| Platform | Limitation |
+|---|---|
+| Render web service | Sleeps after 15 min inactivity; ~30s cold start on first request |
+| Render PostgreSQL | Expires after 90 days — use Neon instead |
+| Neon | 0.5 GB storage, serverless (auto-pauses when idle) |
+| Vercel | 100 GB bandwidth/month; build time limits |
+
+---
+
+### Step 1 — Push code to GitHub
+
+```bash
+cd /path/to/trading-agent
+git init
+git add -A
+git commit -m "Initial commit: Trading Research Pro"
+git remote add origin https://github.com/<your-username>/trading-research-pro.git
+git branch -M main
+git config http.postBuffer 524288000   # increase buffer for large repos
+git push -u origin main
+```
+
+> If push fails with HTTP 400, increase the buffer: `git config http.postBuffer 524288000`
+
+---
+
+### Step 2 — Neon (PostgreSQL)
+
+1. Sign up at **neon.tech** (free, no credit card)
+2. Click **New Project** → choose a region close to your Render region
+3. Copy the **Connection String** — it looks like:
+   ```
+   postgresql://trading_user:<password>@ep-xxx.us-east-2.aws.neon.tech/trading_research?sslmode=require
+   ```
+4. Keep this for the Render setup in Step 3
+
+> The app runs `init_db()` on startup and creates all tables automatically — no manual SQL needed.
+
+---
+
+### Step 3 — Render (Backend)
+
+1. Sign up at **render.com** using GitHub
+2. Click **New → Blueprint**
+3. Connect your GitHub account if prompted → search for and select **`trading-research-pro`**
+4. Set:
+   - **Name**: `trading-research-pro`
+   - **Branch**: `main`
+   - **Render.yaml path**: `/render.yaml` (default)
+5. Click **Apply** — Render creates the web service from `render.yaml`
+6. Once deployed, go to **Dashboard → trading-research-pro-api → Environment**
+7. Add these environment variables manually:
+
+| Variable | Value |
+|---|---|
+| `DATABASE_URL` | Your Neon connection string from Step 2 |
+| `SECRET_KEY` | Run `python3 -c "import secrets; print(secrets.token_hex(32))"` |
+| `ANTHROPIC_API_KEY` | Your Anthropic API key |
+| `POLYGON_API_KEY` | Your Polygon.io API key |
+| `EMAIL_SENDER` | Your Gmail address |
+| `EMAIL_APP_PASSWORD` | Your Gmail App Password (16-char) |
+| `CORS_ORIGINS_RAW` | Leave blank for now — fill in after Step 4 |
+
+8. Click **Save Changes** → Render redeploys (3–5 min to build Docker image)
+9. Copy your backend URL: `https://trading-research-pro-api.onrender.com`
+
+> **Health check**: once deployed, visit `https://trading-research-pro-api.onrender.com/health` — should return `{"status":"ok"}`
+
+---
+
+### Step 4 — Vercel (Frontend)
+
+1. Sign up at **vercel.com** using GitHub
+2. Click **Add New → Project** → import **`trading-research-pro`**
+3. Set **Root Directory** to `frontend`
+4. Under **Environment Variables** add:
+
+| Variable | Value |
+|---|---|
+| `VITE_API_URL` | `https://trading-research-pro-api.onrender.com` |
+
+5. Click **Deploy** (~2 min)
+6. Copy your frontend URL: `https://trading-research-pro.vercel.app`
+
+---
+
+### Step 5 — Wire CORS
+
+1. Go back to **Render → trading-research-pro-api → Environment**
+2. Set `CORS_ORIGINS_RAW` to your Vercel URL:
+   ```
+   https://trading-research-pro.vercel.app
+   ```
+3. Click **Save Changes** → Render redeploys automatically
+
+---
+
+### Step 6 — Verify
+
+```bash
+# Backend health
+curl https://trading-research-pro-api.onrender.com/health
+
+# Login test
+curl -s -X POST https://trading-research-pro-api.onrender.com/api/v1/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email":"admin@tradingresearch.com","password":"Admin123!"}' | python3 -m json.tool
+```
+
+Then open your Vercel URL in a browser and log in with `admin@tradingresearch.com` / `Admin123!`.
+
+---
+
+### Redeployment (future updates)
+
+Any `git push origin main` automatically triggers:
+- Render to rebuild and redeploy the backend Docker image
+- Vercel to rebuild and redeploy the frontend
+
+```bash
+git add -A
+git commit -m "your change"
+git push origin main
+```
+
+---
+
+### Environment variables reference (production)
+
+| Variable | Where set | Description |
+|---|---|---|
+| `DATABASE_URL` | Render | Neon PostgreSQL connection string |
+| `SECRET_KEY` | Render | JWT signing secret (generate randomly) |
+| `ANTHROPIC_API_KEY` | Render | Claude AI for stock analysis |
+| `POLYGON_API_KEY` | Render | Real-time price data |
+| `EMAIL_SENDER` | Render | Gmail address for email reports |
+| `EMAIL_APP_PASSWORD` | Render | Gmail App Password (not account password) |
+| `CORS_ORIGINS_RAW` | Render | Vercel frontend URL (comma-separated if multiple) |
+| `VITE_API_URL` | Vercel | Render backend URL (no trailing slash) |
+
+---
+
+## 10. API Endpoints
+
+Base URL (local): `http://localhost:8000/api/v1`
+Base URL (prod):  `https://trading-research-pro-api.onrender.com/api/v1`
 
 All protected endpoints require: `Authorization: Bearer <jwt_token>`
 
