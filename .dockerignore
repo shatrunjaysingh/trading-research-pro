@@ -1,0 +1,44 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Environment & secrets
+.env
+*.env
+
+# Database files (never bake into image)
+*.db
+*.sqlite
+*.sqlite3
+trading.db
+
+# Logs
+*.log
+trading.log
+
+# Git
+.git/
+.gitignore
+
+# Docker files (already in build context, no need to copy)
+Dockerfile
+docker-compose.yml
+.dockerignore
+
+# Dev tooling
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Python cache
+*.egg-info/
+dist/
+build/
+.eggs/

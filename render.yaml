@@ -1,0 +1,31 @@
+services:
+  - type: web
+    name: trading-research-pro-api
+    runtime: docker
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: .
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: trading-research-pro-db
+          property: connectionString
+      - key: SECRET_KEY
+        generateValue: true
+      - key: ANTHROPIC_API_KEY
+        sync: false          # set manually in Render dashboard
+      - key: POLYGON_API_KEY
+        sync: false
+      - key: EMAIL_SENDER
+        sync: false
+      - key: EMAIL_APP_PASSWORD
+        sync: false
+      - key: CORS_ORIGINS_RAW
+        sync: false          # set to your Vercel URL, e.g. https://yourapp.vercel.app
+
+databases:
+  - name: trading-research-pro-db
+    plan: free
+    databaseName: trading_research
+    user: trading_user

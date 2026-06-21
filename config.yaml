@@ -1,0 +1,198 @@
+trade:
+  max_per_trade_usd: 100
+  max_trades_per_session: 3
+  cash_reserve_pct: 0.10        # keep 10% of portfolio in cash at all times
+
+assets:
+  stocks:
+    - AAPL
+    - MSFT
+    - NVDA
+    - AMZN
+    - GOOGL
+    - META
+    - TSLA
+    - LLY
+    - AVGO
+    - JPM
+    - V
+    - XOM
+    - UNH
+    - MA
+    - JNJ
+    - PG
+    - COST
+    - HD
+    - MRK
+    - NFLX
+  crypto:
+    - BTC
+    - ETH
+    - SOL
+    - DOGE
+    - ADA
+    - AVAX
+    - LINK
+    - LTC
+    - XLM
+    - BCH
+    - BNB
+    - XRP
+    - DOT
+    - MATIC
+    - UNI
+    - ATOM
+    - ALGO
+    - VET
+    - SHIB
+    - NEAR
+
+portfolio:
+  target_stocks_pct: 60         # 60% of portfolio in stocks
+  target_crypto_pct: 40         # 40% of portfolio in crypto
+  rebalance_drift_threshold: 5  # rebalance if allocation drifts >5%
+
+strategies:
+  dca:
+    enabled: true
+    day_of_week: Monday         # execute DCA only on Mondays
+    amount_per_asset_usd: 10    # $10 per asset per week
+
+  rules:
+    enabled: true
+    buy_dip_threshold_pct: -2.0   # buy $100 if asset is down 2%+ today
+    take_profit_pct: 5.0          # sell when position is up 5% from avg cost
+    stop_loss_pct: -8.0           # sell when position is down 8% from avg cost
+
+  rebalancer:
+    enabled: true
+
+  ai_analysis:
+    enabled: true
+    max_new_positions: 2          # AI can open at most 2 new positions per session
+
+schedule:
+  run_time: "09:30"               # ET, trading agent fires at market open
+  report_time: "09:00"            # ET, research report emailed 30 min before open
+  timezone: "America/New_York"
+
+research:
+  mode: api           # "free" = yfinance, no API key needed
+                      # "api"  = Claude + live web search, requires ANTHROPIC_API_KEY
+  top_n: 5            # picks per category (all stocks + penny stocks)
+  max_price: null     # null = dual-category mode (default); set e.g. 5 to force penny-only
+
+sectors:
+  technology:
+    - AAPL
+    - MSFT
+    - NVDA
+    - GOOGL
+    - META
+    - AMZN
+    - AVGO
+    - AMD
+    - CRM
+    - ORCL
+    - ADBE
+    - INTC
+    - QCOM
+    - MU
+    - NOW
+    - PLTR
+    - TSLA
+  pharma:
+    - LLY
+    - MRK
+    - ABBV
+    - PFE
+    - BMY
+    - AMGN
+    - GILD
+    - BIIB
+    - REGN
+    - VRTX
+    - MRNA
+    - NVO
+  healthcare:
+    - UNH
+    - JNJ
+    - CVS
+    - TMO
+    - ABT
+    - MDT
+    - DHR
+    - SYK
+    - BDX
+    - ISRG
+    - ELV
+    - HCA
+  finance:
+    - JPM
+    - V
+    - MA
+    - BAC
+    - GS
+    - MS
+    - WFC
+    - BLK
+    - AXP
+    - C
+    - SCHW
+    - CME
+  energy:
+    - XOM
+    - CVX
+    - COP
+    - SLB
+    - EOG
+    - PSX
+    - VLO
+    - MPC
+    - OXY
+    - HAL
+  consumer:
+    - HD
+    - COST
+    - PG
+    - MCD
+    - NKE
+    - SBUX
+    - LOW
+    - TGT
+    - WMT
+    - TJX
+  industrials:
+    - CAT
+    - DE
+    - HON
+    - GE
+    - BA
+    - RTX
+    - LMT
+    - UPS
+    - FDX
+    - NOC
+  crypto:
+    - BTC
+    - ETH
+    - SOL
+    - BNB
+    - XRP
+    - DOGE
+    - ADA
+    - AVAX
+    - LINK
+    - DOT
+
+email:
+  recipient:
+    - ssingh327@gmail.com
+    - umesh.cts@gmail.com
+    - palvivek0328@yahoo.com
+  sender: ""          # your Gmail address  e.g. you@gmail.com
+                      # set EMAIL_SENDER env var instead of filling this in
+  smtp_host: smtp.gmail.com
+  smtp_port: 587
+                      # set EMAIL_APP_PASSWORD env var with your Gmail App Password
+                      # (Google Account → Security → 2-Step Verification → App passwords)

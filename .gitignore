@@ -1,0 +1,21 @@
+__pycache__/
+*.pyc
+*.pyo
+.env
+*.db
+*.sqlite
+trading.log
+scheduler.log
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/.env.local
+
+# IDE
+.idea/
+.vscode/
+
+# Python venv
+venv/
+.venv/

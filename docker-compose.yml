@@ -1,0 +1,85 @@
+services:
+
+  # ── PostgreSQL ────────────────────────────────────────────────────────────────
+  db:
+    image: postgres:16-alpine
+    container_name: trading_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB:       ${DB_NAME:-trading_research}
+      POSTGRES_USER:     ${DB_USER:-trading_user}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-trading_pass}
+    ports:
+      - "${DB_PORT:-5433}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-trading_user} -d ${DB_NAME:-trading_research}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - trading_net
+
+  # ── FastAPI backend ───────────────────────────────────────────────────────────
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: trading_backend
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL:        postgresql://${DB_USER:-trading_user}:${DB_PASSWORD:-trading_pass}@db:5432/${DB_NAME:-trading_research}
+      SECRET_KEY:          ${SECRET_KEY:-change-me-in-production}
+      ANTHROPIC_API_KEY:   ${ANTHROPIC_API_KEY:-}
+      EMAIL_SENDER:        ${EMAIL_SENDER:-}
+      EMAIL_APP_PASSWORD:  ${EMAIL_APP_PASSWORD:-}
+      CORS_ORIGINS:        '["http://localhost:5173","http://localhost:80","http://frontend"]'
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - trading_net
+    volumes:
+      - ./config.yaml:/app/config.yaml:ro
+
+  # ── React frontend ────────────────────────────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: trading_frontend
+    restart: unless-stopped
+    ports:
+      - "${APP_PORT:-3000}:80"
+    depends_on:
+      - backend
+    networks:
+      - trading_net
+
+  # ── pgAdmin (optional: docker compose --profile tools up) ─────────────────────
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: trading_pgadmin
+    restart: unless-stopped
+    environment:
+      PGADMIN_DEFAULT_EMAIL:    ${PGADMIN_EMAIL:-admin@tradingresearch.com}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD:-Admin123!}
+    ports:
+      - "${PGADMIN_PORT:-5050}:80"
+    depends_on:
+      - db
+    networks:
+      - trading_net
+    profiles:
+      - tools
+
+volumes:
+  postgres_data:
+    driver: local
+
+networks:
+  trading_net:
+    driver: bridge
