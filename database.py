@@ -318,9 +318,9 @@ def init_db() -> None:
                     ),
                 )
 
-        # --- Seed admin user if no users exist ---
-        cur.execute("SELECT COUNT(*) AS cnt FROM users")
-        if cur.fetchone()["cnt"] == 0:
+        # --- Seed admin user if it doesn't exist ---
+        cur.execute("SELECT id FROM users WHERE email='admin@tradingresearch.com'")
+        if cur.fetchone() is None:
             cur.execute(
                 "SELECT id FROM licenses WHERE tier='enterprise' LIMIT 1"
             )
@@ -332,7 +332,10 @@ def init_db() -> None:
                 """INSERT INTO users
                    (email, username, password_hash, full_name, role,
                     license_id, must_change_pwd)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s)""",
+                   VALUES (%s, %s, %s, %s, %s, %s, %s)
+                   ON CONFLICT (email) DO UPDATE
+                   SET password_hash = EXCLUDED.password_hash,
+                       role = 'admin', is_active = TRUE""",
                 (
                     "admin@tradingresearch.com", "admin", pwd_hash,
                     "System Administrator", "admin", ent_id, False,
