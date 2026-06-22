@@ -541,6 +541,51 @@ function AnalystPanel({ analyst, currentPrice, currency = '$' }: { analyst: Anal
           </div>
         ))}
       </div>
+
+      {/* Individual analyst ratings */}
+      {analyst.ratings && analyst.ratings.length > 0 && (
+        <div>
+          <div className="text-xs font-semibold text-ink-muted uppercase tracking-wide mb-2">
+            Recent Analyst Ratings (Last 12 Months)
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="text-ink-faint border-b border-surface-border">
+                  <th className="text-left py-1.5 font-medium pr-3">Date</th>
+                  <th className="text-left py-1.5 font-medium pr-3">Firm</th>
+                  <th className="text-left py-1.5 font-medium pr-3">Rating</th>
+                  <th className="text-left py-1.5 font-medium pr-3">From</th>
+                  <th className="text-left py-1.5 font-medium">Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {analyst.ratings.map((r, i) => {
+                  const actionColor =
+                    r.action === 'up'   ? 'text-green-600' :
+                    r.action === 'down' ? 'text-red-500'   :
+                    r.action === 'init' ? 'text-blue-600'  : 'text-ink-muted'
+                  const actionLabel =
+                    r.action === 'up'   ? 'Upgrade'   :
+                    r.action === 'down' ? 'Downgrade' :
+                    r.action === 'init' ? 'Initiated' :
+                    r.action === 'reit' ? 'Reiterated':
+                    r.action === 'main' ? 'Maintained': r.action
+                  return (
+                    <tr key={i} className="border-b border-surface-border/40 last:border-0 hover:bg-surface-muted/30">
+                      <td className="py-1.5 text-ink-muted pr-3 whitespace-nowrap">{r.date}</td>
+                      <td className="py-1.5 text-ink pr-3 max-w-[120px] truncate font-medium">{r.firm || '—'}</td>
+                      <td className="py-1.5 pr-3 font-semibold text-ink">{r.to_grade || '—'}</td>
+                      <td className="py-1.5 pr-3 text-ink-muted">{r.from_grade || '—'}</td>
+                      <td className={`py-1.5 font-semibold ${actionColor}`}>{actionLabel}</td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

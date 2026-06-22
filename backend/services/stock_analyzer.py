@@ -515,7 +515,8 @@ def _fetch_analyst_data(ticker: str, current_price: float | None) -> dict:
 
     ticker_upper = ticker.strip().upper()
     try:
-        info = yf.Ticker(ticker_upper).info
+        tk_obj = yf.Ticker(ticker_upper)
+        info   = tk_obj.info
     except Exception:
         return {}
 
@@ -539,6 +540,28 @@ def _fetch_analyst_data(ticker: str, current_price: float | None) -> dict:
     if target_mean and current_price and current_price > 0:
         upside = round((target_mean - current_price) / current_price * 100, 2)
 
+    # Individual analyst upgrades / downgrades (last 12 months, up to 20)
+    ratings: list[dict] = []
+    try:
+        import pandas as _pd
+        ud = tk_obj.upgrades_downgrades
+        if ud is not None and not ud.empty:
+            cutoff = _pd.Timestamp.now(tz="UTC") - _pd.DateOffset(months=12)
+            if ud.index.tz is None:
+                ud.index = ud.index.tz_localize("UTC")
+            recent = ud[ud.index >= cutoff].sort_index(ascending=False).head(20)
+            for ts, row in recent.iterrows():
+                from_g = str(row.get("FromGrade", "")).strip()
+                ratings.append({
+                    "date":       ts.strftime("%Y-%m-%d"),
+                    "firm":       str(row.get("Firm", "")).strip(),
+                    "to_grade":   str(row.get("ToGrade", "")).strip(),
+                    "from_grade": from_g if from_g else None,
+                    "action":     str(row.get("Action", "")).strip(),
+                })
+    except Exception:
+        ratings = []
+
     return {
         "recommendation":      KEY_LABEL.get(rec_key.lower(), rec_key.replace("_", " ").title()) if rec_key else None,
         "recommendation_key":  rec_key or None,
@@ -549,6 +572,7 @@ def _fetch_analyst_data(ticker: str, current_price: float | None) -> dict:
         "target_high":         target_high,
         "target_low":          target_low,
         "upside_pct":          upside,
+        "ratings":             ratings,
     }
 
 

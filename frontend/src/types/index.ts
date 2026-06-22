@@ -365,6 +365,14 @@ export interface LiveQuote {
   low: number | null
 }
 
+export interface AnalystRating {
+  date: string
+  firm: string
+  to_grade: string
+  from_grade: string | null
+  action: string   // up | down | main | init | reit
+}
+
 export interface AnalystSnapshot {
   recommendation: string | null
   recommendation_key: string | null
@@ -375,6 +383,7 @@ export interface AnalystSnapshot {
   target_high: number | null
   target_low: number | null
   upside_pct: number | null
+  ratings?: AnalystRating[]
 }
 
 export interface SecInsiderTransaction {
