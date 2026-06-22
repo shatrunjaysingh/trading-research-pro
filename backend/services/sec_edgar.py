@@ -192,10 +192,10 @@ def get_insider_transactions(ticker: str, days: int = 90, max_filings: int = 10)
     return results
 
 
-def summarise_insider_transactions(transactions: list[dict]) -> dict:
+def summarise_insider_transactions(transactions: list[dict]) -> dict | None:
     """Aggregate a list of Form 4 transactions into buy/sell signals."""
     if not transactions:
-        return {}
+        return None
 
     purchases = [t for t in transactions if t["code"] == "P"]
     sales     = [t for t in transactions if t["code"] == "S"]

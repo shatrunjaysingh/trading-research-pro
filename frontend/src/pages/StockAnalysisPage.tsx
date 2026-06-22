@@ -1729,7 +1729,8 @@ export function StockAnalysisPage() {
 
             {/* SEC EDGAR Insider Activity */}
             {(() => {
-              const summary = result.sec_insider_summary
+              const summary = (result.sec_insider_summary && 'buy_count' in result.sec_insider_summary)
+                ? result.sec_insider_summary : null
               const txns    = result.sec_insider_transactions ?? []
               const filings = result.sec_recent_filings ?? []
               if (!summary && txns.length === 0 && filings.length === 0) return null

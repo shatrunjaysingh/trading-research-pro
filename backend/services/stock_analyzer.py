@@ -504,7 +504,7 @@ def _fetch_institutional(ticker: str) -> dict:
                 )
     except Exception:
         pass
-    return result
+    return result if result else None
 
 
 def _fetch_analyst_data(ticker: str, current_price: float | None) -> dict:
@@ -876,13 +876,13 @@ def analyze_stock_sync(
             result["sec_recent_filings"]       = get_recent_filings(ticker)
         except Exception:
             result["sec_insider_transactions"] = []
-            result["sec_insider_summary"]      = {}
+            result["sec_insider_summary"]      = None
             result["sec_recent_filings"]       = []
     else:
         result["analyst"] = None
         result["institutional"] = None
         result["sec_insider_transactions"] = []
-        result["sec_insider_summary"]      = {}
+        result["sec_insider_summary"]      = None
         result["sec_recent_filings"]       = []
 
     if include_peers:
