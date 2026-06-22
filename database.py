@@ -829,7 +829,7 @@ def get_token_stats() -> dict:
                 COALESCE(SUM(input_tokens),  0) AS total_input_tokens,
                 COALESCE(SUM(output_tokens), 0) AS total_output_tokens,
                 COALESCE(SUM(total_tokens),  0) AS total_tokens,
-                COALESCE(SUM(cost_usd),      0) AS total_cost_usd
+                COALESCE(SUM(cost_usd),      0) AS total_cost
             FROM token_usage
         """)
         summary = dict(cur.fetchone() or {})
@@ -838,7 +838,7 @@ def get_token_stats() -> dict:
             SELECT
                 COUNT(*)                        AS today_calls,
                 COALESCE(SUM(total_tokens),  0) AS today_tokens,
-                COALESCE(SUM(cost_usd),      0) AS today_cost_usd
+                COALESCE(SUM(cost_usd),      0) AS today_cost
             FROM token_usage
             WHERE created_at >= CURRENT_DATE
         """)
@@ -848,7 +848,7 @@ def get_token_stats() -> dict:
             SELECT
                 COUNT(*)                        AS this_month_calls,
                 COALESCE(SUM(total_tokens),  0) AS this_month_tokens,
-                COALESCE(SUM(cost_usd),      0) AS this_month_cost_usd
+                COALESCE(SUM(cost_usd),      0) AS month_cost
             FROM token_usage
             WHERE created_at >= DATE_TRUNC('month', NOW())
         """)
@@ -856,33 +856,33 @@ def get_token_stats() -> dict:
 
         cur.execute("""
             SELECT feature,
-                   COUNT(*)                        AS calls,
+                   COUNT(*)                        AS call_count,
                    COALESCE(SUM(total_tokens),  0) AS total_tokens,
-                   COALESCE(SUM(cost_usd),      0) AS cost_usd
+                   COALESCE(SUM(cost_usd),      0) AS total_cost
             FROM token_usage
             GROUP BY feature
-            ORDER BY cost_usd DESC
+            ORDER BY total_cost DESC
         """)
         by_feature = [dict(r) for r in cur.fetchall()]
 
         cur.execute("""
             SELECT username,
-                   COUNT(*)                        AS calls,
+                   COUNT(*)                        AS call_count,
                    COALESCE(SUM(total_tokens),  0) AS total_tokens,
-                   COALESCE(SUM(cost_usd),      0) AS cost_usd,
+                   COALESCE(SUM(cost_usd),      0) AS total_cost,
                    MAX(created_at)                 AS last_used
             FROM token_usage
             GROUP BY username
-            ORDER BY cost_usd DESC
+            ORDER BY total_cost DESC
             LIMIT 50
         """)
         by_user = [dict(r) for r in cur.fetchall()]
 
         cur.execute("""
             SELECT DATE(created_at AT TIME ZONE 'UTC') AS date,
-                   COUNT(*)                        AS calls,
+                   COUNT(*)                        AS call_count,
                    COALESCE(SUM(total_tokens),  0) AS total_tokens,
-                   COALESCE(SUM(cost_usd),      0) AS cost_usd
+                   COALESCE(SUM(cost_usd),      0) AS total_cost
             FROM token_usage
             WHERE created_at >= NOW() - INTERVAL '30 days'
             GROUP BY DATE(created_at AT TIME ZONE 'UTC')
