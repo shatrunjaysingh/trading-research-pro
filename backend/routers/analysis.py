@@ -116,6 +116,105 @@ async def clear_cache(
     return {"deleted": deleted, "ticker": ticker, "mode": mode}
 
 
+def _fmt_context(ticker: str, ctx: dict) -> str:
+    """Convert raw context dict into a readable analyst brief."""
+    def money(v, decimals=2):
+        if v is None: return "N/A"
+        if abs(v) >= 1e12: return f"${v/1e12:.2f}T"
+        if abs(v) >= 1e9:  return f"${v/1e9:.2f}B"
+        if abs(v) >= 1e6:  return f"${v/1e6:.2f}M"
+        return f"${v:,.{decimals}f}"
+
+    price  = ctx.get("price")
+    lines  = [f"=== {ticker} — {ctx.get('company', ticker)} ==="]
+
+    # Price & momentum
+    if price:
+        lines += [
+            "",
+            "PRICE & MOMENTUM",
+            f"  Current Price : {money(price)}",
+            f"  Day Change    : {ctx.get('day_change_pct', 0):+.2f}%",
+            f"  Week Change   : {ctx.get('week_change_pct', 0):+.2f}%",
+            f"  Month Change  : {ctx.get('month_change_pct', 0):+.2f}%",
+            f"  52-Week Range : {money(ctx.get('low_52w'))} – {money(ctx.get('high_52w'))}",
+            f"  Signal        : {(ctx.get('signal') or 'N/A').upper()}  (score {ctx.get('score', '—')}/100)",
+        ]
+
+    # Technicals
+    rsi = ctx.get("rsi")
+    lines += ["", "TECHNICAL INDICATORS"]
+    if rsi is not None:
+        interp = "oversold — bullish" if rsi < 30 else "overbought — bearish" if rsi > 70 else "neutral"
+        lines.append(f"  RSI           : {rsi:.1f}  ({interp})")
+    macd = ctx.get("macd")
+    if macd is not None:
+        lines.append(f"  MACD          : {macd:.4f}")
+    sma50 = ctx.get("sma50")
+    if sma50 and price:
+        rel = "above ▲ bullish" if price > sma50 else "below ▼ bearish"
+        lines.append(f"  50-day SMA    : {money(sma50)}  (price is {rel})")
+    sma200 = ctx.get("sma200")
+    if sma200 and price:
+        rel = "above ▲ bull market" if price > sma200 else "below ▼ bear territory"
+        lines.append(f"  200-day SMA   : {money(sma200)}  (price is {rel})")
+    vol_sig = ctx.get("vol_signal")
+    if vol_sig:
+        vt = ctx.get("vol_trend_pct")
+        lines.append(f"  Volume (30d)  : {vol_sig}  ({vt:+.1f}% vs prior 30d)" if vt is not None else f"  Volume signal : {vol_sig}")
+
+    # Fundamentals
+    mc = ctx.get("market_cap")
+    if mc:
+        lines += ["", "FUNDAMENTALS"]
+        lines.append(f"  Market Cap    : {money(mc)}")
+    pe = ctx.get("pe_ratio")
+    if pe:  lines.append(f"  P/E (TTM)     : {pe:.1f}x")
+    fpe = ctx.get("forward_pe")
+    if fpe: lines.append(f"  Forward P/E   : {fpe:.1f}x")
+    eps = ctx.get("eps")
+    if eps is not None: lines.append(f"  EPS (TTM)     : ${eps:.2f}")
+    rev = ctx.get("revenue")
+    if rev: lines.append(f"  Revenue (TTM) : {money(rev)}")
+    pm = ctx.get("profit_margin")
+    if pm is not None: lines.append(f"  Profit Margin : {pm*100:.1f}%")
+    de = ctx.get("debt_to_equity")
+    if de is not None: lines.append(f"  Debt/Equity   : {de:.2f}")
+    roe = ctx.get("return_on_equity")
+    if roe is not None: lines.append(f"  ROE           : {roe*100:.1f}%")
+    beta = ctx.get("beta")
+    if beta is not None: lines.append(f"  Beta          : {beta:.2f}")
+    dy = ctx.get("dividend_yield")
+    if dy: lines.append(f"  Dividend Yield: {dy*100:.2f}%")
+
+    # Analyst consensus
+    lines += ["", "ANALYST CONSENSUS"]
+    ar = ctx.get("analyst_rating")
+    na = ctx.get("num_analysts")
+    if ar:
+        lines.append(f"  Rating        : {ar}  ({na or '?'} analysts)")
+    at = ctx.get("analyst_target")
+    au = ctx.get("analyst_upside")
+    if at:
+        lines.append(f"  Price Target  : {money(at)}  ({au:+.1f}% upside)" if au is not None else f"  Price Target  : {money(at)}")
+
+    # SEC insider activity
+    ins = ctx.get("insider_signal")
+    if ins:
+        net = ctx.get("insider_net_shares")
+        net_str = f"  net {net:+,} shares (90d)" if net else ""
+        lines += ["", "SEC INSIDER ACTIVITY (FORM 4, 90 DAYS)"]
+        lines.append(f"  Signal        : {ins.replace('_', ' ').upper()}{net_str}")
+
+    # Narrative AI analysis
+    ai_text = ctx.get("ai_analysis")
+    if ai_text:
+        lines += ["", "EXISTING AI NARRATIVE ANALYSIS"]
+        lines.append(ai_text[:3000])
+
+    return "\n".join(lines)
+
+
 class ChatMessage(BaseModel):
     role: str   # "user" | "assistant"
     content: str
@@ -140,18 +239,17 @@ async def stock_chat(
     if not ticker or not message:
         raise HTTPException(status_code=400, detail="ticker and message are required.")
 
-    ctx = body.context
-    system = f"""You are a financial research assistant helping analyse the stock {ticker}.
+    brief  = _fmt_context(ticker, body.context)
+    system = f"""You are a financial research assistant helping a user analyse the stock {ticker}.
 
-Here is the latest data for {ticker}:
-{json.dumps(ctx, indent=2)}
+{brief}
 
 Guidelines:
-- Answer questions about this stock concisely and accurately using the data above.
-- When the data doesn't cover something, say so rather than guessing.
-- Never tell the user to buy or sell. Always note this is for research only, not investment advice.
-- Format numbers clearly (e.g. $152.30, +3.5%, 45M shares).
-- Keep responses focused and under 300 words unless a detailed breakdown is explicitly asked for."""
+- Answer questions using the data above. Be specific — quote actual numbers from the data.
+- If the data doesn't cover something, say so rather than guessing.
+- Interpret indicators: e.g. RSI < 30 = oversold, price above 200-day SMA = uptrend.
+- Never recommend buying or selling. This is for research purposes only.
+- Keep responses concise and clear. Use bullet points for multi-part answers."""
 
     messages = [{"role": m.role, "content": m.content} for m in body.history]
     messages.append({"role": "user", "content": message})
