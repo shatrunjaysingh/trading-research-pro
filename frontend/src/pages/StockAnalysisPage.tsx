@@ -1,4 +1,4 @@
-import { useState, useRef, useMemo } from 'react'
+import { useState, useRef, useMemo, useEffect, useCallback } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import {
   ComposedChart, Area, Bar, Line, XAxis, YAxis,
@@ -7,7 +7,7 @@ import {
 import { useAuthStore } from '../store/auth'
 import { useMarketStore, useActiveExchanges } from '../store/market'
 import { COUNTRIES, formatTicker } from '../types/markets'
-import { streamStockAnalysis, fetchStockHistory } from '../api/analysis'
+import { streamStockAnalysis, fetchStockHistory, streamStockChat, ChatMsg } from '../api/analysis'
 import {
   StockAnalysisResult, TechnicalSnapshot, FundamentalSnapshot,
   AnalystSnapshot, IndicatorKey, StockAnalysisRequest,
@@ -961,6 +961,160 @@ function AIAnalysisPanel({ text }: { text: string }) {
   )
 }
 
+// ── Stock Chat Panel ──────────────────────────────────────────────────────────
+
+interface DisplayMsg { role: 'user' | 'assistant'; content: string; streaming?: boolean }
+
+function StockChatPanel({ result, currency = '$' }: { result: StockAnalysisResult; currency?: string }) {
+  const [messages, setMessages] = useState<DisplayMsg[]>([])
+  const [input, setInput]       = useState('')
+  const [busy, setBusy]         = useState(false)
+  const bottomRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }, [messages])
+
+  const send = useCallback(async () => {
+    const text = input.trim()
+    if (!text || busy) return
+    setInput('')
+
+    const userMsg: DisplayMsg = { role: 'user', content: text }
+    setMessages(prev => [...prev, userMsg, { role: 'assistant', content: '', streaming: true }])
+    setBusy(true)
+
+    const history: ChatMsg[] = messages.map(m => ({ role: m.role, content: m.content }))
+
+    try {
+      let accumulated = ''
+      for await (const event of streamStockChat(result, text, history)) {
+        if (event.type === 'delta') {
+          accumulated += event.text
+          setMessages(prev => {
+            const next = [...prev]
+            next[next.length - 1] = { role: 'assistant', content: accumulated, streaming: true }
+            return next
+          })
+        } else if (event.type === 'done') {
+          setMessages(prev => {
+            const next = [...prev]
+            next[next.length - 1] = { role: 'assistant', content: accumulated }
+            return next
+          })
+        } else if (event.type === 'error') {
+          setMessages(prev => {
+            const next = [...prev]
+            next[next.length - 1] = { role: 'assistant', content: `Error: ${event.message}` }
+            return next
+          })
+        }
+      }
+    } catch (err: unknown) {
+      setMessages(prev => {
+        const next = [...prev]
+        next[next.length - 1] = { role: 'assistant', content: `Failed to get response. Please try again.` }
+        return next
+      })
+    } finally {
+      setBusy(false)
+    }
+  }, [input, busy, messages, result])
+
+  const onKey = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send() }
+  }
+
+  const SUGGESTIONS = [
+    'What are the key risks for this stock?',
+    'Is the valuation cheap or expensive?',
+    'What does the insider activity signal?',
+    'Summarise the technical setup',
+  ]
+
+  return (
+    <div className="bg-surface rounded-xl border border-surface-border flex flex-col" style={{ height: '480px' }}>
+      {/* Header */}
+      <div className="flex items-center gap-2 px-4 py-3 border-b border-surface-border flex-shrink-0">
+        <div className="w-2 h-2 rounded-full bg-green-400" />
+        <span className="text-sm font-semibold text-ink">Ask about {result.ticker}</span>
+        {result.company_name && <span className="text-xs text-ink-faint">· {result.company_name}</span>}
+        {messages.length > 0 && (
+          <button onClick={() => setMessages([])}
+            className="ml-auto text-xs text-ink-faint hover:text-ink-muted transition-colors">
+            Clear
+          </button>
+        )}
+      </div>
+
+      {/* Messages */}
+      <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3 min-h-0">
+        {messages.length === 0 ? (
+          <div className="h-full flex flex-col items-center justify-center gap-4">
+            <p className="text-sm text-ink-faint text-center">
+              Ask anything about {result.ticker} — technicals, fundamentals, risks, valuation.
+            </p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 w-full max-w-sm">
+              {SUGGESTIONS.map(s => (
+                <button key={s} onClick={() => { setInput(s); }}
+                  className="text-xs text-left px-3 py-2 rounded-lg border border-surface-border bg-surface-muted hover:bg-surface-border/50 text-ink-muted transition-colors">
+                  {s}
+                </button>
+              ))}
+            </div>
+          </div>
+        ) : (
+          messages.map((m, i) => (
+            <div key={i} className={clsx('flex gap-2', m.role === 'user' ? 'justify-end' : 'justify-start')}>
+              {m.role === 'assistant' && (
+                <div className="w-6 h-6 rounded-full bg-blue-100 dark:bg-blue-900/40 flex items-center justify-center flex-shrink-0 mt-0.5">
+                  <span className="text-[10px] font-bold text-blue-600 dark:text-blue-400">AI</span>
+                </div>
+              )}
+              <div className={clsx(
+                'max-w-[80%] rounded-2xl px-3 py-2 text-sm leading-relaxed',
+                m.role === 'user'
+                  ? 'bg-blue-600 text-white rounded-tr-sm'
+                  : 'bg-surface-muted text-ink rounded-tl-sm',
+              )}>
+                {m.content || (m.streaming && <span className="inline-block w-2 h-4 bg-ink-muted/50 animate-pulse rounded" />)}
+              </div>
+            </div>
+          ))
+        )}
+        <div ref={bottomRef} />
+      </div>
+
+      {/* Input */}
+      <div className="px-4 py-3 border-t border-surface-border flex-shrink-0">
+        <div className="flex gap-2">
+          <textarea
+            value={input}
+            onChange={e => setInput(e.target.value)}
+            onKeyDown={onKey}
+            placeholder={`Ask about ${result.ticker}…`}
+            rows={1}
+            disabled={busy}
+            className="flex-1 resize-none rounded-xl border border-surface-border bg-surface-muted px-3 py-2 text-sm text-ink placeholder:text-ink-faint focus:outline-none focus:ring-2 focus:ring-primary/40 disabled:opacity-50"
+            style={{ minHeight: '40px', maxHeight: '120px' }}
+          />
+          <button
+            onClick={send}
+            disabled={busy || !input.trim()}
+            className="flex-shrink-0 w-10 h-10 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed text-white flex items-center justify-center transition-colors"
+          >
+            {busy
+              ? <span className="w-4 h-4 rounded-full border-2 border-white/30 border-t-white animate-spin" />
+              : <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" /></svg>
+            }
+          </button>
+        </div>
+        <p className="text-[10px] text-ink-faint mt-1.5 text-center">For research only — not investment advice · Enter to send</p>
+      </div>
+    </div>
+  )
+}
+
 // ── Main Page ─────────────────────────────────────────────────────────────────
 
 export function StockAnalysisPage() {
@@ -1886,6 +2040,9 @@ export function StockAnalysisPage() {
                 {result.ai_analysis  && <AIAnalysisPanel  text={result.ai_analysis}  />}
               </div>
             )}
+
+            {/* Stock chatbot */}
+            <StockChatPanel result={result} currency={currency} />
           </div>
         )}
 

@@ -1,8 +1,10 @@
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 
+import json
 from fastapi import APIRouter, HTTPException, Depends
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
 
 import auth as auth_module
 from database import log_audit
@@ -112,6 +114,69 @@ async def clear_cache(
         raise HTTPException(status_code=403, detail="Admin permission required.")
     deleted = cache_invalidate(ticker=ticker, mode=mode)
     return {"deleted": deleted, "ticker": ticker, "mode": mode}
+
+
+class ChatMessage(BaseModel):
+    role: str   # "user" | "assistant"
+    content: str
+
+class StockChatRequest(BaseModel):
+    ticker: str
+    message: str
+    history: list[ChatMessage] = []
+    context: dict = {}
+
+@router.post("/chat")
+async def stock_chat(
+    body: StockChatRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    """Stream a Claude response for a question about a specific stock."""
+    if not auth_module.has_permission(current_user, "research"):
+        raise HTTPException(status_code=403, detail="Research permission required.")
+
+    ticker  = body.ticker.strip().upper()
+    message = body.message.strip()
+    if not ticker or not message:
+        raise HTTPException(status_code=400, detail="ticker and message are required.")
+
+    ctx = body.context
+    system = f"""You are a financial research assistant helping analyse the stock {ticker}.
+
+Here is the latest data for {ticker}:
+{json.dumps(ctx, indent=2)}
+
+Guidelines:
+- Answer questions about this stock concisely and accurately using the data above.
+- When the data doesn't cover something, say so rather than guessing.
+- Never tell the user to buy or sell. Always note this is for research only, not investment advice.
+- Format numbers clearly (e.g. $152.30, +3.5%, 45M shares).
+- Keep responses focused and under 300 words unless a detailed breakdown is explicitly asked for."""
+
+    messages = [{"role": m.role, "content": m.content} for m in body.history]
+    messages.append({"role": "user", "content": message})
+
+    async def generate():
+        try:
+            import anthropic
+            client = anthropic.Anthropic()
+            with client.messages.stream(
+                model="claude-haiku-4-5-20251001",
+                max_tokens=1024,
+                system=system,
+                messages=messages,
+            ) as stream:
+                for text in stream.text_stream:
+                    yield f"data: {json.dumps({'type': 'delta', 'text': text})}\n\n"
+            yield f"data: {json.dumps({'type': 'done'})}\n\n"
+        except Exception as exc:
+            yield f"data: {json.dumps({'type': 'error', 'message': str(exc)})}\n\n"
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @router.get("/snapshot")
