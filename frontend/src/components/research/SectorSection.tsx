@@ -1,6 +1,6 @@
 import { useState, Fragment } from 'react'
 import { clsx } from 'clsx'
-import type { Section, ApiSectionData, FreePick, ApiPick, LiveQuote } from '../../types'
+import type { Section, ApiSectionData, FreePick, ApiPick, LiveQuote, AnalystRating } from '../../types'
 import { DownloadButton } from './PickCard'
 
 // ── helpers ────────────────────────────────────────────────────────────────────
@@ -178,6 +178,38 @@ function FreePickDetail({ pick, sectorLabel }: { pick: FreePick; sectorLabel: st
               <IndicatorRow label="Price Target" value={`$${pick.analyst_target.toFixed(2)}`}
                 note={pick.analyst_upside_pct != null ? `${pick.analyst_upside_pct >= 0 ? '+' : ''}${pick.analyst_upside_pct.toFixed(1)}% upside` : undefined}
                 noteColor={pick.analyst_upside_pct != null ? (pick.analyst_upside_pct >= 0 ? 'text-green-600' : 'text-red-500') : undefined} />
+            )}
+
+            {/* Individual analyst ratings */}
+            {pick.analyst_ratings && pick.analyst_ratings.length > 0 && (
+              <div className="mt-2 pt-2 border-t border-surface-border/60">
+                <div className="text-[10px] uppercase tracking-wide text-ink-faint mb-1.5">Recent Ratings</div>
+                <div className="space-y-0">
+                  {pick.analyst_ratings.slice(0, 8).map((r: AnalystRating, i: number) => {
+                    const actionColor =
+                      r.action === 'up'   ? 'text-green-600' :
+                      r.action === 'down' ? 'text-red-500'   :
+                      r.action === 'init' ? 'text-blue-600'  : 'text-ink-muted'
+                    const actionLabel =
+                      r.action === 'up'   ? '↑ Upgrade'   :
+                      r.action === 'down' ? '↓ Downgrade' :
+                      r.action === 'init' ? '● Initiated'  :
+                      r.action === 'reit' ? '→ Reiterated' : '→ Maintained'
+                    return (
+                      <div key={i} className="flex items-center justify-between py-1 border-b border-surface-border/30 last:border-0">
+                        <div className="flex items-center gap-1.5 min-w-0">
+                          <span className="text-[10px] text-ink-muted whitespace-nowrap">{r.date}</span>
+                          <span className="text-[10px] text-ink font-medium truncate max-w-[90px]">{r.firm}</span>
+                        </div>
+                        <div className="flex items-center gap-1.5 flex-shrink-0">
+                          <span className="text-[10px] font-semibold text-ink">{r.to_grade}</span>
+                          <span className={`text-[10px] font-bold ${actionColor}`}>{actionLabel}</span>
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
             )}
           </div>
         )}

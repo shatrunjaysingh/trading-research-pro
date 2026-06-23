@@ -93,6 +93,7 @@ export interface FreePick {
   analyst_upside_pct?: number | null
   analyst_consensus?: string | null
   num_analysts?: number | null
+  analyst_ratings?: AnalystRating[]
   // Insider / institutional
   insider_net_shares?: number | null
   inst_pct_held?: number | null

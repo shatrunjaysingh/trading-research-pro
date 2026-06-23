@@ -456,6 +456,29 @@ def _score_asset(asset: dict, spy_return_3m: float,
     except Exception:
         pass
 
+    # ── Individual analyst ratings (upgrades/downgrades, last 12 months) ──────
+    analyst_ratings: list = []
+    if asset["type"] == "stock":
+        try:
+            import pandas as _pd
+            ud = tk.upgrades_downgrades
+            if ud is not None and not ud.empty:
+                cutoff = _pd.Timestamp.now(tz="UTC") - _pd.DateOffset(months=12)
+                if ud.index.tz is None:
+                    ud.index = ud.index.tz_localize("UTC")
+                recent_ud = ud[ud.index >= cutoff].sort_index(ascending=False).head(20)
+                for ts, row in recent_ud.iterrows():
+                    from_g = str(row.get("FromGrade", "")).strip()
+                    analyst_ratings.append({
+                        "date":       ts.strftime("%Y-%m-%d"),
+                        "firm":       str(row.get("Firm", "")).strip(),
+                        "to_grade":   str(row.get("ToGrade", "")).strip(),
+                        "from_grade": from_g if from_g else None,
+                        "action":     str(row.get("Action", "")).strip(),
+                    })
+        except Exception:
+            analyst_ratings = []
+
     # ── EPS beat/miss vs consensus (most recent quarter) ──────────────────────
     try:
         eh = getattr(tk, "earnings_history", None)
@@ -777,6 +800,7 @@ def _score_asset(asset: dict, spy_return_3m: float,
         "analyst_upside_pct":  round(analyst_upside_pct, 1),
         "analyst_consensus":   recommendation_key,
         "num_analysts":        num_analysts,
+        "analyst_ratings":     analyst_ratings,
         # insider / institutional fields
         "insider_net_shares":   insider_net_shares,
         "insider_buys":         insider_buys,
