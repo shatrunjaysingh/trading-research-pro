@@ -212,7 +212,30 @@ def _fmt_context(ticker: str, ctx: dict) -> str:
         lines += ["", "EXISTING AI NARRATIVE ANALYSIS"]
         lines.append(ai_text[:3000])
 
+    # News headlines (injected at call time)
+    news = ctx.get("_news_headlines", [])
+    if news:
+        lines += ["", "RECENT NEWS HEADLINES"]
+        for item in news:
+            lines.append(f"  • [{item.get('publisher', '')}] {item.get('title', '')}")
+
     return "\n".join(lines)
+
+
+def _fetch_news_headlines(ticker: str, limit: int = 8) -> list[dict]:
+    """Fetch recent news headlines from yfinance for a ticker."""
+    try:
+        import yfinance as yf
+        raw = yf.Ticker(ticker).news or []
+        out = []
+        for item in raw[:limit]:
+            title = item.get("title") or ""
+            pub   = item.get("publisher") or ""
+            if title:
+                out.append({"title": title, "publisher": pub})
+        return out
+    except Exception:
+        return []
 
 
 class ChatMessage(BaseModel):
@@ -239,7 +262,9 @@ async def stock_chat(
     if not ticker or not message:
         raise HTTPException(status_code=400, detail="ticker and message are required.")
 
-    brief  = _fmt_context(ticker, body.context)
+    ctx = dict(body.context)
+    ctx["_news_headlines"] = _fetch_news_headlines(ticker)
+    brief  = _fmt_context(ticker, ctx)
     system = f"""You are a financial research assistant helping a user analyse the stock {ticker}.
 
 {brief}
