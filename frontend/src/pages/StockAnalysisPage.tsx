@@ -173,7 +173,10 @@ function TechnicalPanel({
           {/* Momentum score */}
           <div>
             <div className="flex justify-between items-center mb-1">
-              <div className="text-xs font-medium text-ink-muted uppercase tracking-wide">Momentum Score</div>
+              <div className="text-xs font-medium text-ink-muted uppercase tracking-wide">
+                Momentum Score
+                <span className="ml-1.5 text-[10px] normal-case font-normal text-ink-faint">(always 3-month daily)</span>
+              </div>
               <div className="text-xs text-ink-faint">{tech.score.toFixed(1)} / 100</div>
             </div>
             <div className="relative h-2.5 bg-surface-muted rounded-full overflow-hidden">

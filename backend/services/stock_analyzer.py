@@ -848,16 +848,35 @@ def analyze_stock_sync(
     result: dict = {"ticker": ticker.upper(), "mode": mode, "time_period": time_period,
                     "requested_indicators": indicators}
 
-    tech_result = _fetch_stock_data(
-        ticker, period_str, interval, indicators,
+    # Always score on 3-month daily bars so signal/score are timeframe-consistent.
+    # The chart displays the user-selected period; scoring uses a fixed baseline.
+    SCORE_PERIOD, SCORE_INTERVAL = "3mo", "1d"
+    score_result = _fetch_stock_data(
+        ticker, SCORE_PERIOD, SCORE_INTERVAL, indicators,
         rsi_period=rsi_period, bb_period=bb_period, bb_std=bb_std,
         macd_fast=macd_fast, macd_slow=macd_slow, macd_signal=macd_signal_period,
     )
-    if "error" in tech_result:
-        result["error"] = tech_result["error"]
+    if "error" in score_result:
+        result["error"] = score_result["error"]
         return result
 
-    tech = tech_result["technical"]
+    tech = score_result["technical"]
+
+    # If the user selected a different period, overlay chart-specific price fields
+    # (current price, day/week change, 52w range, volume) from the selected period
+    # so those display correctly, but keep indicators/score from 3m daily.
+    if period_str != SCORE_PERIOD or interval != SCORE_INTERVAL:
+        chart_result = _fetch_stock_data(
+            ticker, period_str, interval, [],   # no indicators needed for chart overlay
+            rsi_period=rsi_period, bb_period=bb_period, bb_std=bb_std,
+            macd_fast=macd_fast, macd_slow=macd_slow, macd_signal=macd_signal_period,
+        )
+        if "technical" in chart_result:
+            ct = chart_result["technical"]
+            for field in ("current_price", "prev_close", "day_change_pct",
+                          "last_volume", "avg_volume", "vol_ratio"):
+                if ct.get(field) is not None:
+                    tech[field] = ct[field]
 
     # ── Market regime — fetch once, apply multiplier to score ─────────────────
     regime: dict | None = None
