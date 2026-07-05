@@ -11,6 +11,10 @@ import { StockAnalysisPage } from './pages/StockAnalysisPage'
 import { MarketDashboard }   from './pages/MarketDashboard'
 import { WatchlistPage }     from './pages/WatchlistPage'
 import { PortfolioPage }     from './pages/PortfolioPage'
+import { AlertsPage }         from './pages/AlertsPage'
+import { EarningsPage }       from './pages/EarningsPage'
+import { SectorHeatmapPage }  from './pages/SectorHeatmapPage'
+import { OptionsPage }        from './pages/OptionsPage'
 
 // Silently refresh the user object in the background after mount.
 // If the token is stale, the 401 interceptor in client.ts handles the redirect.
@@ -55,6 +59,10 @@ export default function App() {
           <Route path="stocks"    element={<StockAnalysisPage />} />
           <Route path="watchlist" element={<WatchlistPage />} />
           <Route path="portfolio" element={<PortfolioPage />} />
+          <Route path="alerts"    element={<AlertsPage />} />
+          <Route path="earnings"  element={<EarningsPage />} />
+          <Route path="sectors"   element={<SectorHeatmapPage />} />
+          <Route path="options"   element={<OptionsPage />} />
           <Route path="admin"     element={<AdminGuard><AdminPanel /></AdminGuard>} />
           <Route path="profile"   element={<ProfilePage />} />
         </Route>

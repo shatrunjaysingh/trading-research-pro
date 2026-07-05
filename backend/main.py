@@ -8,7 +8,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.config import settings
-from backend.routers import auth, research, admin, profile, analysis, market, prices, watchlist, portfolio, alerts
+from backend.routers import auth, research, admin, profile, analysis, market, prices, watchlist, portfolio, alerts, earnings, options
 from database import init_db
 
 logger = logging.getLogger(__name__)
@@ -22,6 +22,15 @@ async def _digest_scheduler():
     while True:
         try:
             await asyncio.sleep(300)   # check every 5 minutes
+            # Check price alerts every cycle
+            try:
+                from backend.services.price_alert_checker import check_price_alerts
+                check_result = await asyncio.get_event_loop().run_in_executor(None, check_price_alerts)
+                if check_result.get("triggered", 0) > 0:
+                    logger.info("Alert checker: triggered %d alerts", check_result["triggered"])
+            except Exception as exc:
+                logger.error("Price alert checker error: %s", exc)
+
             try:
                 from zoneinfo import ZoneInfo
                 et = ZoneInfo("America/New_York")
@@ -98,6 +107,8 @@ app.include_router(prices.router,     prefix="/api/v1")
 app.include_router(watchlist.router,  prefix="/api/v1")
 app.include_router(portfolio.router,  prefix="/api/v1")
 app.include_router(alerts.router,     prefix="/api/v1")
+app.include_router(earnings.router, prefix="/api/v1")
+app.include_router(options.router,  prefix="/api/v1")
 
 
 @app.get("/health")

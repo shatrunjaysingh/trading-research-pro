@@ -21,3 +21,12 @@ export const apiRemoveHolding = (ticker: string) =>
 
 export const apiGetPortfolioReview = () =>
   client.get<PortfolioReview>('/portfolio/review').then(r => r.data)
+
+export const apiGetPortfolioBacktest = () =>
+  client.get<import('../types').BacktestResult>('/portfolio/backtest').then(r => r.data)
+
+export const apiGetPortfolioBenchmark = () =>
+  client.get<import('../types').BenchmarkResult>('/portfolio/benchmark').then(r => r.data)
+
+export const apiGetPortfolioNews = () =>
+  client.get<import('../types').TickerNews[]>('/portfolio/news').then(r => r.data)

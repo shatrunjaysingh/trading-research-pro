@@ -286,6 +286,22 @@ _SCHEMA_STATEMENTS = [
     )
     """,
     "CREATE INDEX IF NOT EXISTS idx_saved_portfolio_user ON saved_portfolios(user_id)",
+    # Price alerts
+    """
+    CREATE TABLE IF NOT EXISTS price_alerts (
+        id           SERIAL PRIMARY KEY,
+        user_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        ticker       TEXT NOT NULL,
+        condition    TEXT NOT NULL CHECK(condition IN ('above','below','breakout_52w_high','breakdown_52w_low','cross_sma50_up','cross_sma50_down','cross_sma200_up','cross_sma200_down')),
+        target_price NUMERIC(16,4),
+        note         TEXT DEFAULT '',
+        is_active    BOOLEAN DEFAULT TRUE,
+        triggered_at TIMESTAMPTZ,
+        created_at   TIMESTAMPTZ DEFAULT NOW()
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_price_alerts_user ON price_alerts(user_id)",
+    "CREATE INDEX IF NOT EXISTS idx_price_alerts_active ON price_alerts(is_active) WHERE is_active = TRUE",
     # Immutable audit log — prevent any DELETE at the database level
     """
     CREATE OR REPLACE FUNCTION _prevent_audit_delete() RETURNS trigger AS $$
@@ -1461,6 +1477,54 @@ def get_all_saved_portfolios() -> list[dict]:
             "avg_cost": row["avg_cost"],
         })
     return list(users.values())
+
+
+# ---------------------------------------------------------------------------
+# Price Alert CRUD
+# ---------------------------------------------------------------------------
+
+def get_price_alerts(user_id: int) -> list[dict]:
+    with get_db() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute("SELECT * FROM price_alerts WHERE user_id=%s ORDER BY created_at DESC", (user_id,))
+            rows = cur.fetchall()
+    return [dict(r) for r in rows]
+
+def create_price_alert(user_id: int, ticker: str, condition: str, target_price=None, note: str = '') -> dict:
+    with get_db() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                """INSERT INTO price_alerts (user_id, ticker, condition, target_price, note)
+                   VALUES (%s, %s, %s, %s, %s) RETURNING *""",
+                (user_id, ticker.upper(), condition, target_price, note)
+            )
+            return dict(cur.fetchone())
+
+def delete_price_alert(user_id: int, alert_id: int) -> bool:
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM price_alerts WHERE id=%s AND user_id=%s", (alert_id, user_id))
+            return cur.rowcount > 0
+
+def toggle_price_alert(user_id: int, alert_id: int, is_active: bool) -> bool:
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("UPDATE price_alerts SET is_active=%s WHERE id=%s AND user_id=%s", (is_active, alert_id, user_id))
+            return cur.rowcount > 0
+
+def get_active_price_alerts() -> list[dict]:
+    with get_db() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                """SELECT pa.*, u.email, u.full_name FROM price_alerts pa
+                   JOIN users u ON u.id = pa.user_id
+                   WHERE pa.is_active = TRUE AND pa.triggered_at IS NULL AND u.is_active = TRUE""")
+            return [dict(r) for r in cur.fetchall()]
+
+def mark_alert_triggered(alert_id: int) -> None:
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("UPDATE price_alerts SET triggered_at=NOW(), is_active=FALSE WHERE id=%s", (alert_id,))
 
 
 # ---------------------------------------------------------------------------

@@ -193,3 +193,231 @@ async def get_portfolio_review(current_user: dict = Depends(get_current_user)):
     if result.get("error") and not result.get("holdings"):
         raise HTTPException(status_code=404, detail=result["error"])
     return result
+
+
+@router.get("/backtest")
+async def portfolio_backtest(current_user: dict = Depends(get_current_user)):
+    """
+    For each saved holding, compute historical performance over 1W/1M/3M/6M/1Y
+    vs SPY over the same periods.
+    """
+    holdings = db.get_user_portfolio(current_user["id"])
+    if not holdings:
+        raise HTTPException(status_code=404, detail="No saved portfolio")
+
+    def _compute(holding: dict) -> dict | None:
+        try:
+            import yfinance as yf
+            tk = yf.Ticker(holding['ticker'])
+            hist = tk.history(period="2y", interval="1d", auto_adjust=True)
+            if len(hist) < 5:
+                return None
+
+            close = hist['Close']
+            price = float(close.iloc[-1])
+
+            def pct(n_days: int):
+                if len(close) < n_days + 1:
+                    return None
+                return round((close.iloc[-1] / close.iloc[-(n_days+1)] - 1) * 100, 2)
+
+            # Find approximate purchase date (nearest close to avg_cost)
+            avg_cost = holding['avg_cost']
+            diffs = (close - avg_cost).abs()
+            nearest_idx = diffs.idxmin()
+            purchase_date = str(nearest_idx)[:10] if nearest_idx is not None else None
+
+            # Return since avg_cost
+            since_purchase_pct = round((price - avg_cost) / avg_cost * 100, 2)
+
+            return {
+                "ticker":       holding['ticker'],
+                "avg_cost":     avg_cost,
+                "shares":       holding['shares'],
+                "current_price": price,
+                "ret_1w":       pct(5),
+                "ret_1m":       pct(21),
+                "ret_3m":       pct(63),
+                "ret_6m":       pct(126),
+                "ret_1y":       pct(252),
+                "since_purchase_pct": since_purchase_pct,
+                "approx_purchase_date": purchase_date,
+            }
+        except Exception:
+            return None
+
+    def _spy_returns() -> dict:
+        try:
+            import yfinance as yf
+            hist = yf.Ticker('SPY').history(period="2y", interval="1d", auto_adjust=True)
+            close = hist['Close']
+            def pct(n):
+                if len(close) < n + 1: return None
+                return round((close.iloc[-1] / close.iloc[-(n+1)] - 1) * 100, 2)
+            return {"ret_1w": pct(5), "ret_1m": pct(21), "ret_3m": pct(63), "ret_6m": pct(126), "ret_1y": pct(252)}
+        except Exception:
+            return {}
+
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    loop = asyncio.get_event_loop()
+
+    with ThreadPoolExecutor(max_workers=10) as ex:
+        futs = [ex.submit(_compute, h) for h in holdings]
+        spy_fut = ex.submit(_spy_returns)
+        results = [f.result() for f in as_completed(futs) if f.result() is not None]
+        spy = spy_fut.result()
+
+    return {"holdings": results, "spy": spy}
+
+
+@router.get("/benchmark")
+async def portfolio_benchmark(current_user: dict = Depends(get_current_user)):
+    """Compare saved portfolio return to SPY, QQQ, DIA, and sector ETFs."""
+    holdings = db.get_user_portfolio(current_user["id"])
+    if not holdings:
+        raise HTTPException(status_code=404, detail="No saved portfolio")
+
+    BENCHMARKS = {
+        'SPY': 'S&P 500',
+        'QQQ': 'Nasdaq 100',
+        'DIA': 'Dow Jones',
+        'IWM': 'Russell 2000',
+        'VTI': 'Total Market',
+    }
+
+    def _bench(symbol: str) -> dict | None:
+        try:
+            import yfinance as yf
+            hist = yf.Ticker(symbol).history(period="1y", interval="1d", auto_adjust=True)
+            close = hist['Close']
+            def pct(n):
+                if len(close) < n + 1: return None
+                return round((close.iloc[-1] / close.iloc[-(n+1)] - 1) * 100, 2)
+            return {
+                "symbol": symbol,
+                "name":   BENCHMARKS.get(symbol, symbol),
+                "ret_1w": pct(5), "ret_1m": pct(21), "ret_3m": pct(63),
+                "ret_6m": pct(126), "ret_1y": pct(252),
+            }
+        except Exception:
+            return None
+
+    def _holding_perf(h: dict) -> dict | None:
+        try:
+            import yfinance as yf
+            fi = yf.Ticker(h['ticker']).fast_info
+            price = float(fi.last_price) if fi.last_price else None
+            if not price:
+                return None
+            pnl_pct = round((price - h['avg_cost']) / h['avg_cost'] * 100, 2)
+            return {"ticker": h['ticker'], "shares": h['shares'],
+                    "avg_cost": h['avg_cost'], "current_price": price, "pnl_pct": pnl_pct,
+                    "value": round(price * h['shares'], 2)}
+        except Exception:
+            return None
+
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    with ThreadPoolExecutor(max_workers=10) as ex:
+        bench_futs   = {ex.submit(_bench, s): s for s in BENCHMARKS}
+        holding_futs = [ex.submit(_holding_perf, h) for h in holdings]
+        benchmarks   = [f.result() for f in as_completed(bench_futs) if f.result()]
+        h_results    = [f.result() for f in as_completed(holding_futs) if f.result()]
+
+    total_value = sum(h['value'] for h in h_results)
+    total_cost  = sum(h['avg_cost'] * h['shares'] for h in h_results)
+    portfolio_return = round((total_value - total_cost) / total_cost * 100, 2) if total_cost else 0.0
+
+    benchmarks.sort(key=lambda x: x.get('ret_1y', -999) or -999, reverse=True)
+
+    return {
+        "portfolio_return": portfolio_return,
+        "total_value": round(total_value, 2),
+        "total_cost": round(total_cost, 2),
+        "benchmarks": benchmarks,
+        "holdings": h_results,
+    }
+
+
+@router.get("/news")
+async def portfolio_news(current_user: dict = Depends(get_current_user)):
+    """News + AI sentiment for each saved portfolio holding."""
+    holdings = db.get_user_portfolio(current_user["id"])
+    if not holdings:
+        raise HTTPException(status_code=404, detail="No saved portfolio")
+
+    def _fetch_news(ticker: str) -> dict:
+        try:
+            import yfinance as yf
+            from datetime import datetime, timezone
+            news = yf.Ticker(ticker).news or []
+            articles = []
+            for n in news[:5]:
+                pub_ts = n.get('providerPublishTime') or n.get('published')
+                pub_date = None
+                if pub_ts:
+                    try:
+                        pub_date = datetime.fromtimestamp(int(pub_ts), tz=timezone.utc).strftime('%Y-%m-%d %H:%M')
+                    except Exception:
+                        pub_date = str(pub_ts)
+                articles.append({
+                    "title":     n.get('title', ''),
+                    "publisher": n.get('publisher', ''),
+                    "link":      n.get('link', ''),
+                    "published": pub_date,
+                })
+            return {"ticker": ticker, "articles": articles}
+        except Exception:
+            return {"ticker": ticker, "articles": []}
+
+    def _score_sentiment(ticker_news: dict) -> dict:
+        """Use Claude Haiku to score overall sentiment from headlines."""
+        articles = ticker_news.get('articles', [])
+        if not articles:
+            ticker_news['sentiment'] = 'neutral'
+            ticker_news['sentiment_score'] = 50
+            ticker_news['sentiment_reason'] = 'No recent news'
+            return ticker_news
+        try:
+            import anthropic
+            from backend.config import settings
+            client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
+            headlines = "\n".join(f"- {a['title']}" for a in articles)
+            msg = client.messages.create(
+                model="claude-haiku-4-5-20251001",
+                max_tokens=120,
+                messages=[{"role": "user", "content":
+                    f"These are recent news headlines for stock {ticker_news['ticker']}:\n{headlines}\n\n"
+                    "Reply with JSON only (no markdown): {\"sentiment\": \"bullish|bearish|neutral\", \"score\": 0-100, \"reason\": \"one sentence\"}"
+                }]
+            )
+            import json, re
+            text = msg.content[0].text.strip()
+            m = re.search(r'\{.*\}', text, re.DOTALL)
+            if m:
+                data = json.loads(m.group())
+                ticker_news['sentiment']        = data.get('sentiment', 'neutral')
+                ticker_news['sentiment_score']  = int(data.get('score', 50))
+                ticker_news['sentiment_reason'] = data.get('reason', '')
+            else:
+                ticker_news['sentiment'] = 'neutral'; ticker_news['sentiment_score'] = 50
+                ticker_news['sentiment_reason'] = 'Could not parse sentiment'
+        except Exception:
+            ticker_news['sentiment'] = 'neutral'; ticker_news['sentiment_score'] = 50
+            ticker_news['sentiment_reason'] = 'Sentiment analysis unavailable'
+        return ticker_news
+
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    tickers = [h['ticker'] for h in holdings]
+
+    with ThreadPoolExecutor(max_workers=6) as ex:
+        news_futs = {ex.submit(_fetch_news, t): t for t in tickers}
+        news_data = [f.result() for f in as_completed(news_futs)]
+
+    # Score sentiment in parallel
+    with ThreadPoolExecutor(max_workers=4) as ex:
+        sent_futs = [ex.submit(_score_sentiment, nd) for nd in news_data]
+        scored = [f.result() for f in as_completed(sent_futs)]
+
+    scored.sort(key=lambda x: x.get('sentiment_score', 50), reverse=True)
+    return scored

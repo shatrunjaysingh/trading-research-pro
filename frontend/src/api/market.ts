@@ -8,3 +8,6 @@ export async function apiMarketOverview(market = 'all'): Promise<MarketOverview>
 
 export const apiFearGreed = () =>
   client.get<FearGreedIndex>('/market/fear-greed').then(r => r.data)
+
+export const apiGetSectorRotation = () =>
+  client.get<import('../types').SectorData[]>('/market/sectors').then(r => r.data)

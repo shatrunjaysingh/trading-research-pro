@@ -614,3 +614,143 @@ export interface FearGreedIndex {
   color: string
   components: Record<string, FearGreedComponent>
 }
+
+// ── Price Alerts ──────────────────────────────────────────────────────────────
+
+export type AlertCondition =
+  | 'above' | 'below'
+  | 'breakout_52w_high' | 'breakdown_52w_low'
+  | 'cross_sma50_up' | 'cross_sma50_down'
+  | 'cross_sma200_up' | 'cross_sma200_down'
+
+export interface PriceAlert {
+  id: number
+  user_id: number
+  ticker: string
+  condition: AlertCondition
+  target_price: number | null
+  note: string
+  is_active: boolean
+  triggered_at: string | null
+  created_at: string
+}
+
+// ── Earnings ──────────────────────────────────────────────────────────────────
+
+export interface EarningsEntry {
+  ticker: string
+  company: string
+  sector: string
+  earnings_date: string | null
+  days_out: number | null
+  eps_estimate: number | null
+  rev_estimate: number | null
+  eps_actual: number | null
+  pe_ratio: number | null
+  forward_pe: number | null
+  eps_surprise_pct: number | null
+  risk_level: 'high' | 'medium' | 'low'
+}
+
+// ── Sector Rotation ───────────────────────────────────────────────────────────
+
+export interface SectorData {
+  sector: string
+  etf: string
+  price: number
+  ret_1w: number | null
+  ret_1m: number | null
+  ret_3m: number | null
+  ret_ytd: number | null
+  rs_1w: number | null
+  rs_1m: number | null
+  rs_3m: number | null
+  trend: 'up' | 'down'
+  vol_ratio: number | null
+  vs_sma200: number | null
+}
+
+// ── Portfolio Backtest ────────────────────────────────────────────────────────
+
+export interface BacktestHolding {
+  ticker: string
+  avg_cost: number
+  shares: number
+  current_price: number
+  ret_1w: number | null
+  ret_1m: number | null
+  ret_3m: number | null
+  ret_6m: number | null
+  ret_1y: number | null
+  since_purchase_pct: number
+  approx_purchase_date: string | null
+}
+
+export interface BacktestResult {
+  holdings: BacktestHolding[]
+  spy: { ret_1w: number | null; ret_1m: number | null; ret_3m: number | null; ret_6m: number | null; ret_1y: number | null }
+}
+
+// ── Benchmark ─────────────────────────────────────────────────────────────────
+
+export interface BenchmarkEntry {
+  symbol: string
+  name: string
+  ret_1w: number | null
+  ret_1m: number | null
+  ret_3m: number | null
+  ret_6m: number | null
+  ret_1y: number | null
+}
+
+export interface BenchmarkResult {
+  portfolio_return: number
+  total_value: number
+  total_cost: number
+  benchmarks: BenchmarkEntry[]
+  holdings: { ticker: string; shares: number; avg_cost: number; current_price: number; pnl_pct: number; value: number }[]
+}
+
+// ── News Sentiment ────────────────────────────────────────────────────────────
+
+export interface NewsArticle {
+  title: string
+  publisher: string
+  link: string
+  published: string | null
+}
+
+export interface TickerNews {
+  ticker: string
+  articles: NewsArticle[]
+  sentiment: 'bullish' | 'bearish' | 'neutral'
+  sentiment_score: number
+  sentiment_reason: string
+}
+
+// ── Options ───────────────────────────────────────────────────────────────────
+
+export interface UnusualOption {
+  type: 'call' | 'put'
+  exp: string
+  strike: number
+  volume: number
+  open_interest: number
+  vol_oi_ratio: number
+  iv: number
+  last_price: number
+}
+
+export interface OptionsFlow {
+  ticker: string
+  price: number | null
+  put_call_ratio: number
+  pc_signal: 'bullish' | 'bearish' | 'neutral'
+  total_call_vol: number
+  total_put_vol: number
+  total_call_oi: number
+  total_put_oi: number
+  avg_iv_pct: number | null
+  unusual_activity: UnusualOption[]
+  expirations_used: string[]
+}

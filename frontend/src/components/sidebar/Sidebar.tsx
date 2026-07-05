@@ -10,7 +10,11 @@ const NAV = [
   { to: '/research',  label: 'Research',        icon: '🔍' },
   { to: '/stocks',    label: 'Stock Analysis',  icon: '📊' },
   { to: '/watchlist', label: 'Watchlist',       icon: '👁' },
-  { to: '/portfolio', label: 'Portfolio',       icon: '💼' },
+  { to: '/portfolio', label: 'Portfolio',        icon: '💼' },
+  { to: '/alerts',    label: 'Price Alerts',    icon: '🔔' },
+  { to: '/earnings',  label: 'Earnings',        icon: '📅' },
+  { to: '/sectors',   label: 'Sector Heatmap',  icon: '🗺️' },
+  { to: '/options',   label: 'Options Flow',    icon: '⚡' },
   { to: '/admin',     label: 'Admin Panel',     icon: '⚙️', admin: true },
   { to: '/profile',   label: 'My Profile',      icon: '👤' },
 ]

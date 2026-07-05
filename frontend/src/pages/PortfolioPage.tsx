@@ -6,9 +6,12 @@ import {
   apiGetSavedPortfolio,
   apiSavePortfolio,
   apiGetPortfolioReview,
+  apiGetPortfolioBacktest,
+  apiGetPortfolioBenchmark,
+  apiGetPortfolioNews,
   HoldingInput,
 } from '../api/portfolio'
-import { PortfolioResult, PortfolioHolding, ScoredHolding, PortfolioAction } from '../types'
+import { PortfolioResult, PortfolioHolding, ScoredHolding, PortfolioAction, BacktestResult, BenchmarkResult, TickerNews } from '../types'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -227,6 +230,83 @@ function ScoredHoldingRow({ h }: { h: ScoredHolding }) {
   )
 }
 
+// ── Position Sizer ────────────────────────────────────────────────────────────
+
+function PositionSizerPanel({ portfolioValue }: { portfolioValue: number }) {
+  const [pv, setPv] = useState(portfolioValue > 0 ? portfolioValue.toFixed(0) : '100000')
+  const [risk, setRisk] = useState('1')
+  const [entry, setEntry] = useState('')
+  const [stop, setStop] = useState('')
+
+  const pvN    = parseFloat(pv) || 0
+  const riskN  = parseFloat(risk) || 1
+  const entryN = parseFloat(entry) || 0
+  const stopN  = parseFloat(stop) || 0
+
+  const riskAmt  = pvN * riskN / 100
+  const riskPerSh = entryN > 0 && stopN > 0 && entryN > stopN ? entryN - stopN : null
+  const shares   = riskPerSh ? Math.floor(riskAmt / riskPerSh) : null
+  const posValue = shares && entryN ? shares * entryN : null
+  const posWeight = posValue && pvN ? (posValue / pvN * 100) : null
+  const stopLossPct = entryN > 0 && stopN > 0 ? ((stopN - entryN) / entryN * 100) : null
+
+  return (
+    <div className="max-w-lg space-y-6">
+      <div className="card p-5 space-y-4">
+        <div>
+          <h2 className="font-semibold text-ink mb-1">Position Sizing Calculator</h2>
+          <p className="text-xs text-ink-muted">
+            Risk only 1–2% of your portfolio per trade. Enter your entry and stop loss to calculate the right position size.
+          </p>
+        </div>
+
+        {[
+          ['Portfolio Value ($)', pv, setPv, '100000'],
+          ['Risk per Trade (%)', risk, setRisk, '1'],
+          ['Entry Price ($)', entry, setEntry, '150.00'],
+          ['Stop Loss Price ($)', stop, setStop, '140.00'],
+        ].map(([label, val, setter, placeholder]) => (
+          <div key={label as string}>
+            <label className="label">{label as string}</label>
+            <input type="number" value={val as string}
+              onChange={e => (setter as (v: string) => void)(e.target.value)}
+              placeholder={placeholder as string} min="0" step="any" className="input" />
+          </div>
+        ))}
+      </div>
+
+      {entryN > 0 && stopN > 0 && (
+        <div className="card p-5 space-y-3">
+          <h3 className="font-semibold text-ink">Results</h3>
+          {entryN <= stopN && (
+            <p className="text-sm text-red-600">Entry price must be above stop loss price.</p>
+          )}
+          {riskPerSh && (
+            <div className="grid grid-cols-2 gap-3">
+              {[
+                { label: 'Risk Amount', value: `$${riskAmt.toLocaleString('en-US', { maximumFractionDigits: 0 })}` },
+                { label: 'Risk per Share', value: `$${riskPerSh.toFixed(2)}` },
+                { label: 'Shares to Buy', value: shares?.toLocaleString() ?? '—', bold: true },
+                { label: 'Position Value', value: posValue ? `$${posValue.toLocaleString('en-US', { maximumFractionDigits: 0 })}` : '—' },
+                { label: 'Portfolio Weight', value: posWeight ? `${posWeight.toFixed(1)}%` : '—' },
+                { label: 'Stop Loss', value: stopLossPct ? `${stopLossPct.toFixed(1)}%` : '—', color: 'text-red-600' },
+              ].map(c => (
+                <div key={c.label} className="bg-surface-muted rounded-xl p-3">
+                  <div className="text-xs text-ink-faint uppercase tracking-wide">{c.label}</div>
+                  <div className={clsx('text-lg font-bold mt-0.5', c.color ?? 'text-ink', c.bold ? 'text-2xl text-primary' : '')}>{c.value}</div>
+                </div>
+              ))}
+            </div>
+          )}
+          <p className="text-xs text-ink-faint">
+            Rule: if this trade hits your stop, you lose exactly ${riskAmt.toFixed(0)} ({risk}% of portfolio).
+          </p>
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ── Main Page ─────────────────────────────────────────────────────────────────
 
 const PLACEHOLDER: HoldingInput[] = [
@@ -235,7 +315,7 @@ const PLACEHOLDER: HoldingInput[] = [
   { ticker: 'NVDA', shares: 8,  avg_cost: 400 },
 ]
 
-type Tab = 'holdings' | 'review'
+type Tab = 'holdings' | 'review' | 'backtest' | 'benchmark' | 'news' | 'sizer'
 
 export function PortfolioPage() {
   const qc = useQueryClient()
@@ -281,6 +361,10 @@ export function PortfolioPage() {
     enabled: false,
     retry: false,
   })
+
+  const backtestQuery = useQuery({ queryKey: ['portfolio-backtest'], queryFn: apiGetPortfolioBacktest, enabled: false, retry: false })
+  const benchmarkQuery = useQuery({ queryKey: ['portfolio-benchmark'], queryFn: apiGetPortfolioBenchmark, enabled: false, retry: false })
+  const newsQuery = useQuery({ queryKey: ['portfolio-news'], queryFn: apiGetPortfolioNews, enabled: false, retry: false })
 
   function addRow() { setRows(r => [...r, { ticker: '', shares: 0, avg_cost: 0 }]) }
   function removeRow(i: number) { setRows(r => r.filter((_, idx) => idx !== i)) }
@@ -399,13 +483,23 @@ export function PortfolioPage() {
         </div>
 
         {/* Tabs */}
-        {(result || rv) && (
-          <div className="flex gap-1 bg-surface-muted rounded-xl p-1 w-fit">
-            {(['holdings', 'review'] as Tab[]).map(t => (
-              <button key={t} onClick={() => setTab(t)}
+        {(result || rv || true) && (
+          <div className="flex gap-1 bg-surface-muted rounded-xl p-1 w-fit flex-wrap">
+            {(['holdings', 'review', 'backtest', 'benchmark', 'news', 'sizer'] as Tab[]).map(t => (
+              <button key={t} onClick={() => {
+                setTab(t)
+                if (t === 'backtest') backtestQuery.refetch()
+                if (t === 'benchmark') benchmarkQuery.refetch()
+                if (t === 'news') newsQuery.refetch()
+              }}
                 className={clsx('px-4 py-1.5 rounded-lg text-sm font-medium transition-colors',
                   tab === t ? 'bg-surface text-ink shadow-sm' : 'text-ink-muted hover:text-ink')}>
-                {t === 'holdings' ? 'P&L Overview' : 'Daily Review'}
+                {t === 'holdings' ? 'P&L Overview' :
+                 t === 'review'   ? 'Daily Review' :
+                 t === 'backtest' ? 'Backtest' :
+                 t === 'benchmark'? 'Benchmark' :
+                 t === 'news'     ? 'News' :
+                 'Position Sizer'}
               </button>
             ))}
           </div>
