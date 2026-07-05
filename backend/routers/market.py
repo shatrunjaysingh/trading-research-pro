@@ -17,3 +17,14 @@ def market_overview(market: str = "all", current_user: dict = Depends(get_curren
         return fetch_market_overview(market=market)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Market data fetch failed: {exc}")
+
+
+@router.get("/fear-greed")
+def fear_greed_index(current_user: dict = Depends(get_current_user)):
+    if not auth_module.has_permission(current_user, "research"):
+        raise HTTPException(status_code=403, detail="Research permission required.")
+    try:
+        from backend.services.fear_greed import compute_fear_greed
+        return compute_fear_greed()
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Fear & Greed computation failed: {exc}")

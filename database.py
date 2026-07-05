@@ -246,6 +246,18 @@ _SCHEMA_STATEMENTS = [
     """,
     "CREATE INDEX IF NOT EXISTS idx_hist_meta_created ON hist_backtest_meta(created_at DESC)",
     "CREATE INDEX IF NOT EXISTS idx_hist_runs_run_id  ON hist_backtest_runs(run_id)",
+    # Watchlist
+    """
+    CREATE TABLE IF NOT EXISTS watchlists (
+        id          SERIAL PRIMARY KEY,
+        user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        ticker      TEXT NOT NULL,
+        notes       TEXT,
+        added_at    TIMESTAMPTZ DEFAULT NOW(),
+        UNIQUE(user_id, ticker)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_watchlist_user ON watchlists(user_id)",
     "ALTER TABLE users ADD COLUMN IF NOT EXISTS preferences JSONB DEFAULT '{}'::jsonb",
     "ALTER TABLE users ADD COLUMN IF NOT EXISTS consent_at TIMESTAMPTZ",
     "ALTER TABLE users ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ",
@@ -1263,6 +1275,54 @@ def get_track_record_scores(min_picks: int = 3, lookback_days: int = 90) -> dict
         }
     except Exception:
         return {}
+
+
+# ---------------------------------------------------------------------------
+# Watchlist CRUD
+# ---------------------------------------------------------------------------
+
+def get_watchlist(user_id: int) -> list[dict]:
+    with get_db() as conn:
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute(
+            "SELECT * FROM watchlists WHERE user_id = %s ORDER BY added_at DESC",
+            (user_id,),
+        )
+        rows = cur.fetchall()
+    return [dict(r) for r in rows]
+
+
+def add_watchlist_item(user_id: int, ticker: str, notes: str = "") -> dict:
+    with get_db() as conn:
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute(
+            """INSERT INTO watchlists (user_id, ticker, notes)
+               VALUES (%s, %s, %s)
+               ON CONFLICT (user_id, ticker) DO UPDATE SET notes = EXCLUDED.notes
+               RETURNING *""",
+            (user_id, ticker.upper(), notes),
+        )
+        return dict(cur.fetchone())
+
+
+def remove_watchlist_item(user_id: int, ticker: str) -> bool:
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "DELETE FROM watchlists WHERE user_id = %s AND ticker = %s",
+            (user_id, ticker.upper()),
+        )
+        return cur.rowcount > 0
+
+
+def is_in_watchlist(user_id: int, ticker: str) -> bool:
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT 1 FROM watchlists WHERE user_id = %s AND ticker = %s",
+            (user_id, ticker.upper()),
+        )
+        return cur.fetchone() is not None
 
 
 # ---------------------------------------------------------------------------

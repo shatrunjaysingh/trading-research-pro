@@ -6,11 +6,13 @@ import { RoleBadge, TierBadge } from '../ui/Badge'
 import { ThemeToggle } from '../ui/ThemeToggle'
 
 const NAV = [
-  { to: '/market',   label: 'Market Overview', icon: '🌐' },
-  { to: '/research', label: 'Research',        icon: '🔍' },
-  { to: '/stocks',   label: 'Stock Analysis',  icon: '📊' },
-  { to: '/admin',    label: 'Admin Panel',     icon: '⚙️', admin: true },
-  { to: '/profile',  label: 'My Profile',      icon: '👤' },
+  { to: '/market',    label: 'Market Overview', icon: '🌐' },
+  { to: '/research',  label: 'Research',        icon: '🔍' },
+  { to: '/stocks',    label: 'Stock Analysis',  icon: '📊' },
+  { to: '/watchlist', label: 'Watchlist',       icon: '👁' },
+  { to: '/portfolio', label: 'Portfolio',       icon: '💼' },
+  { to: '/admin',     label: 'Admin Panel',     icon: '⚙️', admin: true },
+  { to: '/profile',   label: 'My Profile',      icon: '👤' },
 ]
 
 export function Sidebar({ onClose }: { onClose?: () => void } = {}) {

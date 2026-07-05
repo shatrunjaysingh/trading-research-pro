@@ -9,6 +9,8 @@ import { AdminPanel }        from './pages/AdminPanel'
 import { ProfilePage }       from './pages/ProfilePage'
 import { StockAnalysisPage } from './pages/StockAnalysisPage'
 import { MarketDashboard }   from './pages/MarketDashboard'
+import { WatchlistPage }     from './pages/WatchlistPage'
+import { PortfolioPage }     from './pages/PortfolioPage'
 
 // Silently refresh the user object in the background after mount.
 // If the token is stale, the 401 interceptor in client.ts handles the redirect.
@@ -48,11 +50,13 @@ export default function App() {
           </AuthGuard>
         }>
           <Route index element={<Navigate to="/market" replace />} />
-          <Route path="market"   element={<MarketDashboard />} />
-          <Route path="research" element={<ResearchDashboard />} />
-          <Route path="stocks"   element={<StockAnalysisPage />} />
-          <Route path="admin"    element={<AdminGuard><AdminPanel /></AdminGuard>} />
-          <Route path="profile"  element={<ProfilePage />} />
+          <Route path="market"    element={<MarketDashboard />} />
+          <Route path="research"  element={<ResearchDashboard />} />
+          <Route path="stocks"    element={<StockAnalysisPage />} />
+          <Route path="watchlist" element={<WatchlistPage />} />
+          <Route path="portfolio" element={<PortfolioPage />} />
+          <Route path="admin"     element={<AdminGuard><AdminPanel /></AdminGuard>} />
+          <Route path="profile"   element={<ProfilePage />} />
         </Route>
         <Route path="*" element={<Navigate to="/market" replace />} />
       </Routes>

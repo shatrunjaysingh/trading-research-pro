@@ -826,6 +826,150 @@ Keep it concise and actionable. No fluff."""
         return ""
 
 
+def _detect_patterns(ticker: str) -> list[dict]:
+    """
+    Detect key technical chart patterns from 1-year daily data.
+    Returns a list of pattern dicts: {name, signal, description, strength}.
+    """
+    try:
+        import yfinance as yf
+        hist = yf.Ticker(ticker.upper()).history(period="1y", interval="1d")
+        if len(hist) < 50:
+            return []
+        closes = hist["Close"].tolist()
+    except Exception:
+        return []
+
+    patterns = []
+
+    # Golden Cross / Death Cross (SMA50 vs SMA200)
+    if len(closes) >= 200:
+        sma50_now   = sum(closes[-50:]) / 50
+        sma200_now  = sum(closes[-200:]) / 200
+        sma50_prev  = sum(closes[-51:-1]) / 50
+        sma200_prev = sum(closes[-201:-1]) / 200
+        if sma50_prev <= sma200_prev and sma50_now > sma200_now:
+            patterns.append({
+                "name": "Golden Cross",
+                "signal": "bullish",
+                "description": "SMA50 just crossed above SMA200 — historically a strong long-term buy signal.",
+                "strength": "strong",
+            })
+        elif sma50_prev >= sma200_prev and sma50_now < sma200_now:
+            patterns.append({
+                "name": "Death Cross",
+                "signal": "bearish",
+                "description": "SMA50 just crossed below SMA200 — often signals a prolonged downtrend.",
+                "strength": "strong",
+            })
+        elif sma50_now > sma200_now:
+            patterns.append({
+                "name": "Above 200-Day MA",
+                "signal": "bullish",
+                "description": f"Price is in a long-term uptrend (SMA50 ${sma50_now:.2f} > SMA200 ${sma200_now:.2f}).",
+                "strength": "moderate",
+            })
+        else:
+            patterns.append({
+                "name": "Below 200-Day MA",
+                "signal": "bearish",
+                "description": f"Price is in a long-term downtrend (SMA50 ${sma50_now:.2f} < SMA200 ${sma200_now:.2f}).",
+                "strength": "moderate",
+            })
+
+    # RSI Extremes
+    if len(closes) >= 15:
+        deltas = [closes[i] - closes[i - 1] for i in range(1, len(closes))]
+        gains  = [max(d, 0) for d in deltas[-14:]]
+        losses = [abs(min(d, 0)) for d in deltas[-14:]]
+        avg_g  = sum(gains) / 14
+        avg_l  = sum(losses) / 14
+        rsi = (100 - 100 / (1 + avg_g / avg_l)) if avg_l > 0 else 100
+        if rsi < 30:
+            patterns.append({
+                "name": "RSI Oversold",
+                "signal": "bullish",
+                "description": f"RSI at {rsi:.1f} — deeply oversold, potential mean-reversion bounce.",
+                "strength": "moderate",
+            })
+        elif rsi > 70:
+            patterns.append({
+                "name": "RSI Overbought",
+                "signal": "bearish",
+                "description": f"RSI at {rsi:.1f} — overbought territory, elevated pullback risk.",
+                "strength": "moderate",
+            })
+
+    # MACD Crossover (last 3 bars)
+    if len(closes) >= 35:
+        def ema(data, n):
+            k = 2 / (n + 1)
+            r = [data[0]]
+            for v in data[1:]:
+                r.append(v * k + r[-1] * (1 - k))
+            return r
+        ema12 = ema(closes, 12)
+        ema26 = ema(closes, 26)
+        offset = 25
+        macd_line = [ema12[i] - ema26[i] for i in range(offset, len(closes))]
+        if len(macd_line) >= 12:
+            sig_line = ema(macd_line, 9)
+            hist_vals = [macd_line[i] - sig_line[i] for i in range(len(sig_line))]
+            if len(hist_vals) >= 2:
+                if hist_vals[-2] < 0 and hist_vals[-1] > 0:
+                    patterns.append({
+                        "name": "MACD Bullish Crossover",
+                        "signal": "bullish",
+                        "description": "MACD histogram just crossed above signal line — short-term momentum turning positive.",
+                        "strength": "moderate",
+                    })
+                elif hist_vals[-2] > 0 and hist_vals[-1] < 0:
+                    patterns.append({
+                        "name": "MACD Bearish Crossover",
+                        "signal": "bearish",
+                        "description": "MACD histogram just crossed below signal line — short-term momentum turning negative.",
+                        "strength": "moderate",
+                    })
+
+    # Bollinger Band Squeeze (low volatility → potential breakout)
+    if len(closes) >= 20:
+        sma20 = sum(closes[-20:]) / 20
+        std20 = (sum((c - sma20) ** 2 for c in closes[-20:]) / 20) ** 0.5
+        bb_width = (2 * std20 * 2) / sma20 * 100  # band width as % of price
+        # Historical average width (use prior 20 bars)
+        if len(closes) >= 40:
+            sma20_p  = sum(closes[-40:-20]) / 20
+            std20_p  = (sum((c - sma20_p) ** 2 for c in closes[-40:-20]) / 20) ** 0.5
+            bb_width_p = (2 * std20_p * 2) / sma20_p * 100
+            if bb_width < bb_width_p * 0.7:
+                patterns.append({
+                    "name": "Bollinger Squeeze",
+                    "signal": "neutral",
+                    "description": "Bollinger Bands are tightening — a large move (breakout or breakdown) is likely imminent.",
+                    "strength": "moderate",
+                })
+
+    # 52-Week High proximity (within 2%)
+    high_52w = max(closes[-252:] if len(closes) >= 252 else closes)
+    current  = closes[-1]
+    if current >= high_52w * 0.98:
+        patterns.append({
+            "name": "Near 52-Week High",
+            "signal": "bullish",
+            "description": f"Price ${current:.2f} is within 2% of its 52-week high ${high_52w:.2f} — strong relative strength.",
+            "strength": "moderate",
+        })
+    elif current <= min(closes[-252:] if len(closes) >= 252 else closes) * 1.05:
+        patterns.append({
+            "name": "Near 52-Week Low",
+            "signal": "bearish",
+            "description": f"Price ${current:.2f} is near its 52-week low — potential value trap or distressed situation.",
+            "strength": "moderate",
+        })
+
+    return patterns
+
+
 def analyze_stock_sync(
     ticker: str,
     mode: str,
@@ -946,6 +1090,12 @@ def analyze_stock_sync(
             result["position_size"] = None
     else:
         result["position_size"] = None
+
+    # Technical pattern detection (always, uses 1-year history internally)
+    try:
+        result["patterns"] = _detect_patterns(ticker)
+    except Exception:
+        result["patterns"] = []
 
     if mode == "api":
         fund_for_ai    = result.get("fundamentals") or {}

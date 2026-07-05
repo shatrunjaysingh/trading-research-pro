@@ -3,10 +3,11 @@ import { clsx } from 'clsx'
 import { useAuthStore } from '../../store/auth'
 
 const NAV_ITEMS = [
-  { to: '/market',   label: 'Market',   icon: '🌐' },
-  { to: '/research', label: 'Research', icon: '🔍' },
-  { to: '/stocks',   label: 'Stocks',   icon: '📊' },
-  { to: '/profile',  label: 'Profile',  icon: '👤' },
+  { to: '/market',    label: 'Market',    icon: '🌐' },
+  { to: '/stocks',    label: 'Stocks',    icon: '📊' },
+  { to: '/watchlist', label: 'Watchlist', icon: '👁' },
+  { to: '/portfolio', label: 'Portfolio', icon: '💼' },
+  { to: '/profile',   label: 'Profile',   icon: '👤' },
 ]
 
 export function BottomNav() {

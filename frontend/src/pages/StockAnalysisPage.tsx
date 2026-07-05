@@ -1,5 +1,5 @@
 import { useState, useRef, useMemo, useEffect, useCallback } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   ComposedChart, Area, Bar, Line, XAxis, YAxis,
   CartesianGrid, Tooltip as RechartTooltip, ResponsiveContainer, LineChart,
@@ -8,10 +8,12 @@ import { useAuthStore } from '../store/auth'
 import { useMarketStore, useActiveExchanges } from '../store/market'
 import { COUNTRIES, formatTicker } from '../types/markets'
 import { streamStockAnalysis, fetchStockHistory, streamStockChat, ChatMsg } from '../api/analysis'
+import { apiAddToWatchlist, apiRemoveFromWatchlist, apiCheckWatchlist } from '../api/watchlist'
 import {
   StockAnalysisResult, TechnicalSnapshot, FundamentalSnapshot,
   AnalystSnapshot, IndicatorKey, StockAnalysisRequest,
   SecInsiderTransaction, SecInsiderSummary, SecRecentFiling,
+  TechnicalPattern,
 } from '../types'
 import { clsx } from 'clsx'
 import { InfoTooltip } from '../components/ui/InfoTooltip'
@@ -910,6 +912,9 @@ function ResultBanner({ result, onRefresh, currency = '$' }: { result: StockAnal
             </span>
           </div>
           <CacheBadge result={result} onRefresh={onRefresh} />
+          <div className="mt-2">
+            <WatchlistButton ticker={result.ticker} />
+          </div>
         </div>
 
         {/* Score + Confidence */}
@@ -1118,13 +1123,99 @@ function StockChatPanel({ result, currency = '$' }: { result: StockAnalysisResul
   )
 }
 
+// ── Patterns Panel ────────────────────────────────────────────────────────────
+
+function PatternsPanel({ patterns }: { patterns: TechnicalPattern[] }) {
+  if (!patterns.length) return null
+  return (
+    <div className="bg-surface rounded-xl border border-surface-border p-4">
+      <div className="text-sm font-semibold text-ink mb-3">Technical Patterns Detected</div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        {patterns.map(p => (
+          <div key={p.name} className={clsx(
+            'rounded-lg border px-3 py-2.5',
+            p.signal === 'bullish' ? 'bg-green-50 border-green-200 dark:bg-green-900/20 dark:border-green-700'
+            : p.signal === 'bearish' ? 'bg-red-50 border-red-200 dark:bg-red-900/20 dark:border-red-700'
+            : 'bg-surface-muted border-surface-border',
+          )}>
+            <div className="flex items-center gap-2 mb-1">
+              <span className="text-base leading-none">
+                {p.signal === 'bullish' ? '🟢' : p.signal === 'bearish' ? '🔴' : '⚪'}
+              </span>
+              <span className={clsx(
+                'text-xs font-bold',
+                p.signal === 'bullish' ? 'text-green-700 dark:text-green-400'
+                : p.signal === 'bearish' ? 'text-red-700 dark:text-red-400'
+                : 'text-ink-muted',
+              )}>
+                {p.name}
+              </span>
+              <span className={clsx(
+                'ml-auto text-[10px] px-1.5 py-0.5 rounded font-medium',
+                p.strength === 'strong' ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-400'
+                : 'bg-surface-muted text-ink-faint',
+              )}>
+                {p.strength}
+              </span>
+            </div>
+            <p className="text-xs text-ink-muted leading-snug">{p.description}</p>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+// ── Watchlist Button ──────────────────────────────────────────────────────────
+
+function WatchlistButton({ ticker }: { ticker: string }) {
+  const qc = useQueryClient()
+
+  const { data } = useQuery({
+    queryKey: ['wl-check', ticker],
+    queryFn:  () => apiCheckWatchlist(ticker),
+    staleTime: 30_000,
+  })
+
+  const inList = data?.in_watchlist ?? false
+
+  const addMut = useMutation({
+    mutationFn: () => apiAddToWatchlist(ticker),
+    onSuccess:  () => qc.invalidateQueries({ queryKey: ['wl-check', ticker] }),
+  })
+
+  const remMut = useMutation({
+    mutationFn: () => apiRemoveFromWatchlist(ticker),
+    onSuccess:  () => qc.invalidateQueries({ queryKey: ['wl-check', ticker] }),
+  })
+
+  const busy = addMut.isPending || remMut.isPending
+
+  return (
+    <button
+      onClick={() => inList ? remMut.mutate() : addMut.mutate()}
+      disabled={busy}
+      className={clsx(
+        'flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg font-medium border transition-colors disabled:opacity-50',
+        inList
+          ? 'bg-amber-50 border-amber-300 text-amber-700 hover:bg-red-50 hover:border-red-300 hover:text-red-600 dark:bg-amber-900/20 dark:border-amber-600 dark:text-amber-400'
+          : 'bg-surface border-surface-border text-ink-muted hover:border-primary/50 hover:text-primary',
+      )}
+    >
+      {busy ? '…' : inList ? '👁 Watching' : '+ Watchlist'}
+    </button>
+  )
+}
+
 // ── Main Page ─────────────────────────────────────────────────────────────────
 
 export function StockAnalysisPage() {
   const { user } = useAuthStore()
   const canUseApi = user?.allowed_modes?.includes('api') ?? false
 
-  const [ticker, setTicker] = useState('')
+  // Pre-fill ticker from URL query param (e.g. /stocks?ticker=AAPL from watchlist)
+  const urlParams = new URLSearchParams(typeof window !== 'undefined' ? window.location.search : '')
+  const [ticker, setTicker] = useState(urlParams.get('ticker') ?? '')
   const [mode, setMode] = useState<'free' | 'api'>(canUseApi ? 'api' : 'free')
   const [period, setPeriod] = useState<StockAnalysisRequest['time_period']>('3m')
   const [indicators, setIndicators] = useState<IndicatorKey[]>(['rsi', 'macd', 'sma50', 'sma200', 'volume'])
@@ -1666,6 +1757,11 @@ export function StockAnalysisPage() {
                 bbStd={bbStd}
                 currency={currency}
               />
+            )}
+
+            {/* Technical Patterns */}
+            {result.patterns && result.patterns.length > 0 && (
+              <PatternsPanel patterns={result.patterns} />
             )}
 
             {/* Regime banner */}

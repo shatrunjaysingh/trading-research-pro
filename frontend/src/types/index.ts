@@ -457,6 +457,7 @@ export interface StockAnalysisResult {
   cache_age_seconds?: number | null
   position_size?: PositionSize | null
   regime?: MarketRegime | null
+  patterns?: TechnicalPattern[]
 }
 
 export type StockSSEEvent =
@@ -464,3 +465,80 @@ export type StockSSEEvent =
   | { type: 'result';   data: StockAnalysisResult }
   | { type: 'done' }
   | { type: 'error';    message: string }
+
+// ── Technical Patterns ────────────────────────────────────────────────────────
+
+export interface TechnicalPattern {
+  name: string
+  signal: 'bullish' | 'bearish' | 'neutral'
+  description: string
+  strength: 'strong' | 'moderate' | 'weak'
+}
+
+// ── Watchlist ─────────────────────────────────────────────────────────────────
+
+export interface WatchlistItem {
+  id: number
+  user_id: number
+  ticker: string
+  notes: string | null
+  added_at: string
+  price: number | null
+  day_change_pct: number | null
+  market_cap: number | null
+}
+
+// ── Portfolio ─────────────────────────────────────────────────────────────────
+
+export interface PortfolioHolding {
+  ticker: string
+  company?: string
+  sector?: string
+  industry?: string
+  shares: number
+  avg_cost: number
+  current_price: number | null
+  day_change_pct: number | null
+  current_value: number | null
+  cost_basis: number
+  pnl: number | null
+  pnl_pct: number | null
+  beta: number
+  pe_ratio: number | null
+  market_cap: number | null
+  dividend_yield: number | null
+  weight: number
+  error: string | null
+}
+
+export interface PortfolioSummary {
+  total_value: number
+  total_cost: number
+  total_pnl: number
+  total_pnl_pct: number | null
+  portfolio_beta: number
+  sector_breakdown: Record<string, number>
+  num_holdings: number
+  diversification: number
+  top5_by_weight: { ticker: string; weight: number }[]
+}
+
+export interface PortfolioResult {
+  holdings: PortfolioHolding[]
+  summary: PortfolioSummary
+}
+
+// ── Fear & Greed ──────────────────────────────────────────────────────────────
+
+export interface FearGreedComponent {
+  score: number
+  value: number | null
+  label: string
+}
+
+export interface FearGreedIndex {
+  score: number
+  label: string
+  color: string
+  components: Record<string, FearGreedComponent>
+}

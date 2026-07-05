@@ -7,7 +7,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.config import settings
-from backend.routers import auth, research, admin, profile, analysis, market, prices
+from backend.routers import auth, research, admin, profile, analysis, market, prices, watchlist, portfolio
 from database import init_db
 
 logger = logging.getLogger(__name__)
@@ -46,8 +46,10 @@ app.include_router(research.router, prefix="/api/v1")
 app.include_router(admin.router,    prefix="/api/v1")
 app.include_router(profile.router,  prefix="/api/v1")
 app.include_router(analysis.router, prefix="/api/v1")
-app.include_router(market.router,   prefix="/api/v1")
-app.include_router(prices.router,   prefix="/api/v1")
+app.include_router(market.router,     prefix="/api/v1")
+app.include_router(prices.router,     prefix="/api/v1")
+app.include_router(watchlist.router,  prefix="/api/v1")
+app.include_router(portfolio.router,  prefix="/api/v1")
 
 
 @app.get("/health")

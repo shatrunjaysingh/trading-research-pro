@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { clsx } from 'clsx'
-import { apiMarketOverview } from '../api/market'
-import { MarketTicker } from '../types'
+import { apiMarketOverview, apiFearGreed } from '../api/market'
+import { MarketTicker, FearGreedIndex } from '../types'
 import { useMarketStore } from '../store/market'
 import { MarketSelector } from '../components/ui/MarketSelector'
 
@@ -151,6 +151,97 @@ function Skeleton({ className }: { className?: string }) {
   return <div className={clsx('animate-pulse bg-surface-muted rounded', className)} />
 }
 
+// ── Fear & Greed Gauge ────────────────────────────────────────────────────────
+
+function FearGreedGauge({ data, loading }: { data: FearGreedIndex | undefined; loading: boolean }) {
+  const componentLabels: Record<string, string> = {
+    vix:        'Volatility (VIX)',
+    momentum:   'Market Momentum',
+    safe_haven: 'Safe Haven Demand',
+    junk_bond:  'Junk Bond Demand',
+    breadth:    'Market Breadth',
+  }
+
+  if (loading) {
+    return (
+      <div className="bg-surface rounded-2xl border border-surface-border shadow-card p-5 space-y-3">
+        <Skeleton className="h-4 w-32" />
+        <Skeleton className="h-24 w-full" />
+      </div>
+    )
+  }
+  if (!data) return null
+
+  const score = data.score
+  // Needle angle: 0 → -90deg (left), 100 → 90deg (right)
+  const needleAngle = (score / 100) * 180 - 90
+
+  return (
+    <div className="bg-surface rounded-2xl border border-surface-border shadow-card p-5">
+      <h2 className="text-xs font-bold uppercase tracking-widest text-ink-faint mb-4">Fear &amp; Greed Index</h2>
+
+      <div className="flex flex-col sm:flex-row gap-6 items-center">
+        {/* Gauge */}
+        <div className="flex flex-col items-center gap-2 flex-shrink-0">
+          <svg width="200" height="110" viewBox="0 0 200 110">
+            {/* Background arc segments */}
+            {[
+              { from: 0,  to: 25,  color: '#dc2626' },
+              { from: 25, to: 40,  color: '#f97316' },
+              { from: 40, to: 60,  color: '#eab308' },
+              { from: 60, to: 75,  color: '#22c55e' },
+              { from: 75, to: 100, color: '#16a34a' },
+            ].map(({ from, to, color }) => {
+              const cx = 100, cy = 100, r = 80, sw = 18
+              const toAngle = (pct: number) => ((pct / 100) * 180 - 180) * (Math.PI / 180)
+              const a1 = toAngle(from), a2 = toAngle(to)
+              const x1 = cx + r * Math.cos(a1), y1 = cy + r * Math.sin(a1)
+              const x2 = cx + r * Math.cos(a2), y2 = cy + r * Math.sin(a2)
+              const large = to - from > 50 ? 1 : 0
+              return (
+                <path key={from}
+                  d={`M ${x1} ${y1} A ${r} ${r} 0 ${large} 1 ${x2} ${y2}`}
+                  fill="none" stroke={color} strokeWidth={sw} strokeLinecap="round" />
+              )
+            })}
+            {/* Needle */}
+            <line
+              x1="100" y1="100"
+              x2={100 + 65 * Math.cos((needleAngle - 90) * Math.PI / 180)}
+              y2={100 + 65 * Math.sin((needleAngle - 90) * Math.PI / 180)}
+              stroke={data.color} strokeWidth="3" strokeLinecap="round"
+            />
+            <circle cx="100" cy="100" r="6" fill={data.color} />
+            {/* Score */}
+            <text x="100" y="88" textAnchor="middle" fill={data.color} fontSize="22" fontWeight="bold">{score}</text>
+          </svg>
+          <span className="text-base font-bold" style={{ color: data.color }}>{data.label}</span>
+          <span className="text-xs text-ink-faint">Market Sentiment (0 = Extreme Fear · 100 = Extreme Greed)</span>
+        </div>
+
+        {/* Component bars */}
+        <div className="flex-1 space-y-2.5 w-full">
+          {Object.entries(data.components).map(([key, comp]) => (
+            <div key={key}>
+              <div className="flex justify-between text-xs mb-1">
+                <span className="text-ink-muted">{componentLabels[key] ?? comp.label}</span>
+                <span className="font-semibold text-ink">{comp.score.toFixed(0)}</span>
+              </div>
+              <div className="h-2 bg-surface-muted rounded-full overflow-hidden">
+                <div className="h-full rounded-full transition-all"
+                  style={{
+                    width: `${comp.score}%`,
+                    backgroundColor: comp.score >= 60 ? '#22c55e' : comp.score >= 40 ? '#eab308' : '#ef4444',
+                  }} />
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ── Main Page ─────────────────────────────────────────────────────────────────
 
 export function MarketDashboard() {
@@ -163,6 +254,14 @@ export function MarketDashboard() {
     queryFn:         () => apiMarketOverview(marketId),
     refetchInterval: 60_000,
     staleTime:       30_000,
+  })
+
+  const { data: fearGreed, isLoading: fgLoading } = useQuery({
+    queryKey:        ['fear-greed'],
+    queryFn:         apiFearGreed,
+    refetchInterval: 300_000,   // refresh every 5 min
+    staleTime:       240_000,
+    retry:           1,
   })
 
   const lastUpdated = dataUpdatedAt
@@ -247,6 +346,9 @@ export function MarketDashboard() {
             </div>
           )}
         </section>
+
+        {/* Fear & Greed Index */}
+        <FearGreedGauge data={fearGreed} loading={fgLoading} />
 
         {/* Sector Performance */}
         <section>
