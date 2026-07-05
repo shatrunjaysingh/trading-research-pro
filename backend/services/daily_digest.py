@@ -80,16 +80,17 @@ def _score_ticker_for_digest(ticker: str, spy_returns: dict) -> dict | None:
         return None
 
 
-def run_daily_digest() -> dict:
+def run_daily_digest(force: bool = False) -> dict:
     """
     Run the full daily screening and email all subscribed users.
+    Pass force=True to run on weekends / off-hours (e.g. for testing).
     Returns summary of what was sent.
     """
-    logger.info("Daily digest starting…")
+    logger.info("Daily digest starting… (force=%s)", force)
     today = date.today()
 
-    # Skip weekends
-    if today.weekday() >= 5:
+    # Skip weekends unless forced
+    if not force and today.weekday() >= 5:
         logger.info("Weekend — skipping daily digest")
         return {"skipped": True, "reason": "weekend"}
 

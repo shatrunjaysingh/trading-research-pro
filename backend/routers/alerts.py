@@ -35,7 +35,7 @@ async def send_digest_now(current_user: dict = Depends(get_current_user)):
         from backend.services.daily_digest import run_daily_digest
         import asyncio
         loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(None, run_daily_digest)
+        result = await loop.run_in_executor(None, lambda: run_daily_digest(force=True))
         return result
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
