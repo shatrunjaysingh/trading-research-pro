@@ -273,6 +273,19 @@ _SCHEMA_STATEMENTS = [
     "ALTER TABLE users ADD COLUMN IF NOT EXISTS preferences JSONB DEFAULT '{}'::jsonb",
     "ALTER TABLE users ADD COLUMN IF NOT EXISTS consent_at TIMESTAMPTZ",
     "ALTER TABLE users ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ",
+    # Saved portfolio — persistent holdings per user for daily review
+    """
+    CREATE TABLE IF NOT EXISTS saved_portfolios (
+        id          SERIAL PRIMARY KEY,
+        user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        ticker      TEXT NOT NULL,
+        shares      NUMERIC(16,6) NOT NULL,
+        avg_cost    NUMERIC(16,4) NOT NULL,
+        updated_at  TIMESTAMPTZ DEFAULT NOW(),
+        UNIQUE(user_id, ticker)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_saved_portfolio_user ON saved_portfolios(user_id)",
     # Immutable audit log — prevent any DELETE at the database level
     """
     CREATE OR REPLACE FUNCTION _prevent_audit_delete() RETURNS trigger AS $$
@@ -1377,6 +1390,77 @@ def log_digest_run(run_date, st_count: int, lt_count: int, users_sent: int) -> N
                    users_sent=EXCLUDED.users_sent, created_at=NOW()""",
             (run_date, st_count, lt_count, users_sent),
         )
+
+
+# ---------------------------------------------------------------------------
+# Saved Portfolio CRUD
+# ---------------------------------------------------------------------------
+
+def get_user_portfolio(user_id: int) -> list[dict]:
+    """Return the user's saved portfolio holdings."""
+    with get_db() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                "SELECT ticker, shares::float, avg_cost::float FROM saved_portfolios WHERE user_id = %s ORDER BY ticker",
+                (user_id,),
+            )
+            return [dict(r) for r in cur.fetchall()]
+
+
+def save_user_portfolio(user_id: int, holdings: list[dict]) -> None:
+    """Replace all holdings for a user atomically."""
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM saved_portfolios WHERE user_id = %s", (user_id,))
+            for h in holdings:
+                cur.execute(
+                    """INSERT INTO saved_portfolios (user_id, ticker, shares, avg_cost, updated_at)
+                       VALUES (%s, %s, %s, %s, NOW())""",
+                    (user_id, h["ticker"].upper().strip(), float(h["shares"]), float(h["avg_cost"])),
+                )
+
+
+def remove_portfolio_holding(user_id: int, ticker: str) -> bool:
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM saved_portfolios WHERE user_id = %s AND ticker = %s",
+                (user_id, ticker.upper()),
+            )
+            return cur.rowcount > 0
+
+
+def get_all_saved_portfolios() -> list[dict]:
+    """Return all users with saved portfolios and their holdings (for daily digest)."""
+    with get_db() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute("""
+                SELECT u.id AS user_id, u.email, u.full_name, u.username,
+                       sp.ticker, sp.shares::float, sp.avg_cost::float
+                FROM saved_portfolios sp
+                JOIN users u ON u.id = sp.user_id
+                WHERE u.is_active = TRUE AND u.email <> ''
+                ORDER BY u.id, sp.ticker
+            """)
+            rows = cur.fetchall()
+
+    users: dict[int, dict] = {}
+    for row in rows:
+        uid = row["user_id"]
+        if uid not in users:
+            users[uid] = {
+                "user_id":   uid,
+                "email":     row["email"],
+                "full_name": row["full_name"],
+                "username":  row["username"],
+                "holdings":  [],
+            }
+        users[uid]["holdings"].append({
+            "ticker":   row["ticker"],
+            "shares":   row["shares"],
+            "avg_cost": row["avg_cost"],
+        })
+    return list(users.values())
 
 
 # ---------------------------------------------------------------------------

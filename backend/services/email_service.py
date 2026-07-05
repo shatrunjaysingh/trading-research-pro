@@ -54,10 +54,79 @@ def _score_bar(score: float) -> str:
     return "█" * filled + "░" * (10 - filled)
 
 
+def build_portfolio_section_html(holdings: list[dict]) -> str:
+    """Build the portfolio review section for the digest email."""
+    if not holdings:
+        return ""
+
+    action_styles = {
+        "add_more": ("ADD MORE", "#dcfce7", "#166534"),
+        "hold":     ("HOLD",     "#dbeafe", "#1d4ed8"),
+        "reduce":   ("REDUCE",   "#fef3c7", "#92400e"),
+        "sell":     ("SELL",     "#fee2e2", "#991b1b"),
+    }
+
+    rows = ""
+    for h in holdings:
+        if h.get("error"):
+            continue
+        action = h.get("action", "hold")
+        label, bg, fg = action_styles.get(action, ("HOLD", "#dbeafe", "#1d4ed8"))
+        pnl_pct   = h.get("pnl_pct")
+        pnl_s     = f"{pnl_pct:+.1f}%" if pnl_pct is not None else "—"
+        pnl_color = "#16a34a" if (pnl_pct or 0) >= 0 else "#dc2626"
+        st        = h.get("st_score", 0)
+        lt        = h.get("lt_score") or 0
+        rs        = h.get("rs_score", 0)
+        price_s   = f"${h['current_price']:,.2f}" if h.get("current_price") else "—"
+        reason    = (h.get("action_reasons") or [""])[0]
+
+        rows += f"""
+<tr>
+  <td style="padding:10px 8px;border-bottom:1px solid #e2e8f0;">
+    <strong style="font-size:14px;">{h['ticker']}</strong>
+    <div style="font-size:11px;color:#64748b;">{h.get('company','')}</div>
+  </td>
+  <td style="padding:10px 8px;border-bottom:1px solid #e2e8f0;text-align:center;">
+    <span style="background:{bg};color:{fg};padding:3px 10px;border-radius:99px;font-size:11px;font-weight:700;">{label}</span>
+  </td>
+  <td style="padding:10px 8px;border-bottom:1px solid #e2e8f0;text-align:center;font-size:12px;">
+    ST&nbsp;<strong>{st:.0f}</strong> · LT&nbsp;<strong>{lt:.0f}</strong> · RS&nbsp;<strong>{rs}</strong>
+  </td>
+  <td style="padding:10px 8px;border-bottom:1px solid #e2e8f0;text-align:right;">
+    <strong>{price_s}</strong>
+    <div style="color:{pnl_color};font-size:12px;">{pnl_s}</div>
+  </td>
+  <td style="padding:10px 8px;border-bottom:1px solid #e2e8f0;font-size:11px;color:#475569;max-width:220px;">{reason}</td>
+</tr>"""
+
+    if not rows:
+        return ""
+
+    return f"""
+  <div class="section" style="background:#f0fdf4;border-left:4px solid #16a34a;">
+    <h2 style="color:#166534;">📊 Your Portfolio Review</h2>
+    <p style="font-size:13px;color:#475569;margin-bottom:16px;">
+      Personalised daily analysis of your saved holdings — what to add to, hold, trim, or exit today.
+    </p>
+    <table style="width:100%;border-collapse:collapse;">
+      <tr>
+        <th style="text-align:left;font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.08em;padding:8px;border-bottom:2px solid #e2e8f0;">Stock</th>
+        <th style="text-align:center;font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.08em;padding:8px;border-bottom:2px solid #e2e8f0;">Action</th>
+        <th style="text-align:center;font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.08em;padding:8px;border-bottom:2px solid #e2e8f0;">Scores</th>
+        <th style="text-align:right;font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.08em;padding:8px;border-bottom:2px solid #e2e8f0;">Price / P&L</th>
+        <th style="text-align:left;font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.08em;padding:8px;border-bottom:2px solid #e2e8f0;">Key Reason</th>
+      </tr>
+      {rows}
+    </table>
+  </div>"""
+
+
 def build_digest_html(
     picks: list[dict],
     user_name: str,
     date_str: str,
+    portfolio_holdings: list[dict] | None = None,
 ) -> str:
     """Build the HTML body for a daily digest email."""
 
@@ -158,6 +227,8 @@ Market data may be delayed up to 15 minutes.</p>"""
       {pick_rows(lt_picks)}
     </table>
   </div>
+
+  {build_portfolio_section_html(portfolio_holdings or [])}
 
   <div class="section">
     <h3 style="font-size:14px;color:#1e293b;margin-bottom:12px;">📖 How to use this digest</h3>

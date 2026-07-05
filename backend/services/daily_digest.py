@@ -152,6 +152,23 @@ def run_daily_digest() -> dict:
              for p in top_lt]
         )
 
+        # Build per-user portfolio analyses in advance (only for users with saved portfolios)
+        from backend.services.portfolio_advisor import analyze_saved_portfolio
+        all_saved_portfolios: dict[int, list[dict]] = {}
+        try:
+            portfolios_list = db.get_all_saved_portfolios()
+            logger.info("Found %d users with saved portfolios", len(portfolios_list))
+            for p_user in portfolios_list:
+                uid = p_user["user_id"]
+                try:
+                    analysis = analyze_saved_portfolio(uid)
+                    if analysis.get("holdings"):
+                        all_saved_portfolios[uid] = analysis["holdings"]
+                except Exception as exc:
+                    logger.warning("Portfolio analysis failed for user %d: %s", uid, exc)
+        except Exception as exc:
+            logger.warning("Could not load saved portfolios: %s", exc)
+
         # Send to all subscribed users
         from backend.services.email_service import send_email, build_digest_html
         date_str = today.strftime("%A, %B %-d, %Y")
@@ -164,10 +181,12 @@ def run_daily_digest() -> dict:
 
         for user in subscribed:
             try:
+                user_portfolio = all_saved_portfolios.get(user["id"])
                 html = build_digest_html(
                     picks=email_picks,
                     user_name=user.get("full_name") or user.get("username") or "Trader",
                     date_str=date_str,
+                    portfolio_holdings=user_portfolio,
                 )
                 ok = send_email(
                     to_email=user["email"],

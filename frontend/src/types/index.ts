@@ -553,6 +553,53 @@ export interface PortfolioResult {
   summary: PortfolioSummary
 }
 
+// ── Portfolio Advisor ─────────────────────────────────────────────────────────
+
+export type PortfolioAction = 'add_more' | 'hold' | 'reduce' | 'sell'
+
+export interface ScoredHolding {
+  ticker: string
+  company: string
+  sector: string
+  shares: number
+  avg_cost: number
+  current_price: number | null
+  day_change_pct: number | null
+  current_value: number | null
+  cost_basis: number
+  pnl: number | null
+  pnl_pct: number | null
+  weight: number
+  rs_score: number
+  st_score: number
+  st_signal: string
+  lt_score: number | null
+  lt_signal: string | null
+  action: PortfolioAction
+  action_label: string
+  action_color: string
+  action_confidence: 'high' | 'medium'
+  action_reasons: string[]
+  error?: string
+}
+
+export interface PortfolioReviewSummary {
+  total_value: number
+  total_cost: number
+  total_pnl: number
+  total_pnl_pct: number | null
+  health_score: number
+  top_recommendation: string
+  action_counts: Record<PortfolioAction, number>
+  num_holdings: number
+}
+
+export interface PortfolioReview {
+  holdings: ScoredHolding[]
+  summary: PortfolioReviewSummary
+  error?: string
+}
+
 // ── Fear & Greed ──────────────────────────────────────────────────────────────
 
 export interface FearGreedComponent {

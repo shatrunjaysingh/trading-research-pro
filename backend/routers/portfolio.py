@@ -1,11 +1,13 @@
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 
+import asyncio
 import math
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 
 from backend.auth_middleware import get_current_user
+import database as db
 
 router = APIRouter(prefix="/portfolio", tags=["portfolio"])
 
@@ -140,3 +142,54 @@ async def analyze_portfolio(body: PortfolioRequest, current_user: dict = Depends
             "top5_by_weight":   [{"ticker": h["ticker"], "weight": h["weight"]} for h in top5],
         },
     }
+
+
+# ── Saved Portfolio Endpoints ─────────────────────────────────────────────────
+
+@router.get("/saved")
+async def get_saved_portfolio(current_user: dict = Depends(get_current_user)):
+    """Return the user's saved portfolio holdings."""
+    holdings = db.get_user_portfolio(current_user["id"])
+    return {"holdings": holdings}
+
+
+class SavePortfolioRequest(BaseModel):
+    holdings: list[Holding]
+
+
+@router.post("/save")
+async def save_portfolio(body: SavePortfolioRequest, current_user: dict = Depends(get_current_user)):
+    """Save (replace) the user's portfolio holdings."""
+    if len(body.holdings) > 50:
+        raise HTTPException(status_code=400, detail="Maximum 50 holdings")
+    valid = [h for h in body.holdings if h.ticker.strip() and h.shares > 0 and h.avg_cost > 0]
+    if not valid:
+        raise HTTPException(status_code=400, detail="No valid holdings to save")
+
+    db.save_user_portfolio(
+        current_user["id"],
+        [{"ticker": h.ticker, "shares": h.shares, "avg_cost": h.avg_cost} for h in valid],
+    )
+    return {"saved": len(valid)}
+
+
+@router.delete("/saved/{ticker}")
+async def remove_holding(ticker: str, current_user: dict = Depends(get_current_user)):
+    removed = db.remove_portfolio_holding(current_user["id"], ticker.upper())
+    if not removed:
+        raise HTTPException(status_code=404, detail="Holding not found")
+    return {"removed": ticker.upper()}
+
+
+@router.get("/review")
+async def get_portfolio_review(current_user: dict = Depends(get_current_user)):
+    """
+    Score every saved holding and return actionable recommendations.
+    Takes 20–60s for large portfolios — runs in a thread executor.
+    """
+    from backend.services.portfolio_advisor import analyze_saved_portfolio
+    loop   = asyncio.get_event_loop()
+    result = await loop.run_in_executor(None, analyze_saved_portfolio, current_user["id"])
+    if result.get("error") and not result.get("holdings"):
+        raise HTTPException(status_code=404, detail=result["error"])
+    return result

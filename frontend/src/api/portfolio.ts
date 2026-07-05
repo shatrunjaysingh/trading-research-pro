@@ -1,5 +1,5 @@
 import client from './client'
-import { PortfolioResult } from '../types'
+import { PortfolioResult, PortfolioReview } from '../types'
 
 export interface HoldingInput {
   ticker: string
@@ -9,3 +9,15 @@ export interface HoldingInput {
 
 export const apiAnalyzePortfolio = (holdings: HoldingInput[]) =>
   client.post<PortfolioResult>('/portfolio/analyze', { holdings }).then(r => r.data)
+
+export const apiGetSavedPortfolio = () =>
+  client.get<{ holdings: HoldingInput[] }>('/portfolio/saved').then(r => r.data)
+
+export const apiSavePortfolio = (holdings: HoldingInput[]) =>
+  client.post<{ saved: number }>('/portfolio/save', { holdings }).then(r => r.data)
+
+export const apiRemoveHolding = (ticker: string) =>
+  client.delete<{ removed: string }>(`/portfolio/saved/${ticker}`).then(r => r.data)
+
+export const apiGetPortfolioReview = () =>
+  client.get<PortfolioReview>('/portfolio/review').then(r => r.data)

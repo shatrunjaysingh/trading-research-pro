@@ -1,8 +1,14 @@
-import { useState } from 'react'
-import { useMutation } from '@tanstack/react-query'
+import { useState, useEffect } from 'react'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { clsx } from 'clsx'
-import { apiAnalyzePortfolio, HoldingInput } from '../api/portfolio'
-import { PortfolioResult, PortfolioHolding } from '../types'
+import {
+  apiAnalyzePortfolio,
+  apiGetSavedPortfolio,
+  apiSavePortfolio,
+  apiGetPortfolioReview,
+  HoldingInput,
+} from '../api/portfolio'
+import { PortfolioResult, PortfolioHolding, ScoredHolding, PortfolioAction } from '../types'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -41,7 +47,36 @@ const SECTOR_COLORS: Record<string, string> = {
   'Unknown':              '#94a3b8',
 }
 
-// ── Components ────────────────────────────────────────────────────────────────
+const ACTION_STYLES: Record<PortfolioAction, { bg: string; text: string; label: string }> = {
+  add_more: { bg: 'bg-green-100 dark:bg-green-900/40', text: 'text-green-700 dark:text-green-300', label: 'ADD MORE' },
+  hold:     { bg: 'bg-blue-100 dark:bg-blue-900/40',  text: 'text-blue-700 dark:text-blue-300',  label: 'HOLD' },
+  reduce:   { bg: 'bg-amber-100 dark:bg-amber-900/40',text: 'text-amber-700 dark:text-amber-300',label: 'REDUCE' },
+  sell:     { bg: 'bg-red-100 dark:bg-red-900/40',    text: 'text-red-700 dark:text-red-300',    label: 'SELL' },
+}
+
+function ActionBadge({ action }: { action: PortfolioAction }) {
+  const s = ACTION_STYLES[action]
+  return (
+    <span className={clsx('inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold', s.bg, s.text)}>
+      {s.label}
+    </span>
+  )
+}
+
+function ScoreBar({ score, max = 100 }: { score: number; max?: number }) {
+  const pct = Math.min(100, (score / max) * 100)
+  const color = score >= 70 ? 'bg-green-500' : score >= 50 ? 'bg-blue-500' : score >= 35 ? 'bg-amber-500' : 'bg-red-500'
+  return (
+    <div className="flex items-center gap-1.5">
+      <div className="h-1.5 w-16 bg-surface-muted rounded-full overflow-hidden">
+        <div className={clsx('h-full rounded-full', color)} style={{ width: `${pct}%` }} />
+      </div>
+      <span className="text-xs font-semibold text-ink tabular-nums">{score.toFixed(0)}</span>
+    </div>
+  )
+}
+
+// ── Sector Pie ────────────────────────────────────────────────────────────────
 
 function SectorPie({ breakdown }: { breakdown: Record<string, number> }) {
   const entries = Object.entries(breakdown)
@@ -52,18 +87,13 @@ function SectorPie({ breakdown }: { breakdown: Record<string, number> }) {
     return { sector, pct, start }
   })
 
-  const r = 70
-  const cx = 90
-  const cy = 90
-
+  const r = 70; const cx = 90; const cy = 90
   function arc(startPct: number, endPct: number) {
     const startAngle = (startPct / 100) * 360 - 90
     const endAngle   = (endPct   / 100) * 360 - 90
     const rad = (deg: number) => (deg * Math.PI) / 180
-    const x1  = cx + r * Math.cos(rad(startAngle))
-    const y1  = cy + r * Math.sin(rad(startAngle))
-    const x2  = cx + r * Math.cos(rad(endAngle))
-    const y2  = cy + r * Math.sin(rad(endAngle))
+    const x1  = cx + r * Math.cos(rad(startAngle)); const y1 = cy + r * Math.sin(rad(startAngle))
+    const x2  = cx + r * Math.cos(rad(endAngle));   const y2 = cy + r * Math.sin(rad(endAngle))
     const large = endPct - startPct > 50 ? 1 : 0
     return `M ${cx} ${cy} L ${x1} ${y1} A ${r} ${r} 0 ${large} 1 ${x2} ${y2} Z`
   }
@@ -76,18 +106,13 @@ function SectorPie({ breakdown }: { breakdown: Record<string, number> }) {
             fill={SECTOR_COLORS[sector] ?? '#94a3b8'} stroke="white" strokeWidth="1.5" />
         ))}
         <circle cx={cx} cy={cy} r={42} fill="var(--color-surface)" />
-        <text x={cx} y={cy - 6} textAnchor="middle" className="fill-ink text-xs font-bold" fontSize="11">
-          Sectors
-        </text>
-        <text x={cx} y={cy + 10} textAnchor="middle" className="fill-ink-muted text-xs" fontSize="10">
-          {entries.length}
-        </text>
+        <text x={cx} y={cy - 6} textAnchor="middle" className="fill-ink" fontSize="11" fontWeight="bold">Sectors</text>
+        <text x={cx} y={cy + 10} textAnchor="middle" className="fill-ink-muted" fontSize="10">{entries.length}</text>
       </svg>
       <div className="grid grid-cols-1 gap-1.5 flex-1">
         {slices.map(({ sector, pct }) => (
           <div key={sector} className="flex items-center gap-2">
-            <span className="w-2.5 h-2.5 rounded-full flex-shrink-0"
-              style={{ backgroundColor: SECTOR_COLORS[sector] ?? '#94a3b8' }} />
+            <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ backgroundColor: SECTOR_COLORS[sector] ?? '#94a3b8' }} />
             <span className="text-xs text-ink truncate flex-1">{sector}</span>
             <span className="text-xs font-semibold text-ink-muted">{pct.toFixed(1)}%</span>
           </div>
@@ -96,6 +121,8 @@ function SectorPie({ breakdown }: { breakdown: Record<string, number> }) {
     </div>
   )
 }
+
+// ── Holdings Row (P&L view) ───────────────────────────────────────────────────
 
 function HoldingRow({ h }: { h: PortfolioHolding }) {
   if (h.error) {
@@ -134,31 +161,129 @@ function HoldingRow({ h }: { h: PortfolioHolding }) {
   )
 }
 
+// ── Scored Holding Row (Review view) ─────────────────────────────────────────
+
+function ScoredHoldingRow({ h }: { h: ScoredHolding }) {
+  const [open, setOpen] = useState(false)
+  if (h.error) {
+    return (
+      <div className="flex items-center gap-3 py-3 border-b border-surface-border text-red-500 text-sm">
+        <span className="font-bold w-20">{h.ticker}</span>
+        <span className="text-xs">{h.error}</span>
+      </div>
+    )
+  }
+  return (
+    <div className="border-b border-surface-border last:border-0">
+      <button
+        className="w-full text-left"
+        onClick={() => setOpen(o => !o)}
+      >
+        <div className="grid grid-cols-[80px_1fr_110px_140px_80px_80px] gap-2 items-center py-3 px-1 hover:bg-surface-muted/50 transition-colors text-sm">
+          <div>
+            <div className="font-bold text-ink">{h.ticker}</div>
+            <div className="text-xs text-ink-faint">{h.weight.toFixed(1)}%</div>
+          </div>
+          <div className="min-w-0">
+            <div className="text-ink text-xs truncate">{h.company}</div>
+            <div className="text-ink-faint text-xs">{h.sector}</div>
+          </div>
+          <div>
+            <ActionBadge action={h.action} />
+          </div>
+          <div className="space-y-1">
+            <div className="flex items-center gap-1 text-xs text-ink-faint">
+              <span className="w-5">ST</span><ScoreBar score={h.st_score} />
+            </div>
+            <div className="flex items-center gap-1 text-xs text-ink-faint">
+              <span className="w-5">LT</span><ScoreBar score={h.lt_score ?? 0} />
+            </div>
+          </div>
+          <div className="text-center">
+            <div className="text-sm font-bold text-ink">{h.rs_score}</div>
+            <div className="text-xs text-ink-faint">RS</div>
+          </div>
+          <div className="text-right">
+            <div className={clsx('font-semibold text-sm', pnlColor(h.pnl_pct))}>{pct(h.pnl_pct)}</div>
+            <div className="text-xs text-ink-faint">{fmt$(h.current_price)}</div>
+          </div>
+        </div>
+      </button>
+      {open && h.action_reasons.length > 0 && (
+        <div className={clsx('mx-1 mb-3 p-3 rounded-xl text-xs space-y-1',
+          h.action === 'add_more' ? 'bg-green-50 dark:bg-green-950/30' :
+          h.action === 'hold'     ? 'bg-blue-50 dark:bg-blue-950/30' :
+          h.action === 'reduce'   ? 'bg-amber-50 dark:bg-amber-950/30' :
+          'bg-red-50 dark:bg-red-950/30')}>
+          {h.action_reasons.map((r, i) => (
+            <div key={i} className="flex items-start gap-2">
+              <span className="text-ink-faint mt-0.5">•</span>
+              <span className="text-ink-muted">{r}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ── Main Page ─────────────────────────────────────────────────────────────────
 
-const PLACEHOLDER = [
+const PLACEHOLDER: HoldingInput[] = [
   { ticker: 'AAPL', shares: 10, avg_cost: 150 },
   { ticker: 'MSFT', shares: 5,  avg_cost: 320 },
   { ticker: 'NVDA', shares: 8,  avg_cost: 400 },
 ]
 
+type Tab = 'holdings' | 'review'
+
 export function PortfolioPage() {
+  const qc = useQueryClient()
   const [rows, setRows] = useState<HoldingInput[]>(PLACEHOLDER)
   const [result, setResult] = useState<PortfolioResult | null>(null)
+  const [tab, setTab] = useState<Tab>('holdings')
+  const [saveMsg, setSaveMsg] = useState('')
 
-  const mut = useMutation({
-    mutationFn: apiAnalyzePortfolio,
-    onSuccess:  setResult,
+  // Load saved portfolio on mount
+  const { data: savedData } = useQuery({
+    queryKey: ['portfolio-saved'],
+    queryFn: apiGetSavedPortfolio,
+    retry: false,
   })
 
-  function addRow() {
-    setRows(r => [...r, { ticker: '', shares: 0, avg_cost: 0 }])
-  }
+  useEffect(() => {
+    if (savedData?.holdings?.length) {
+      setRows(savedData.holdings)
+    }
+  }, [savedData])
 
-  function removeRow(i: number) {
-    setRows(r => r.filter((_, idx) => idx !== i))
-  }
+  // Analyze portfolio (P&L view)
+  const analyzeMut = useMutation({
+    mutationFn: apiAnalyzePortfolio,
+    onSuccess: setResult,
+  })
 
+  // Save portfolio
+  const saveMut = useMutation({
+    mutationFn: apiSavePortfolio,
+    onSuccess: (data) => {
+      setSaveMsg(`Saved ${data.saved} holdings`)
+      qc.invalidateQueries({ queryKey: ['portfolio-saved'] })
+      qc.invalidateQueries({ queryKey: ['portfolio-review'] })
+      setTimeout(() => setSaveMsg(''), 3000)
+    },
+  })
+
+  // Portfolio review (scored recommendations)
+  const reviewQuery = useQuery({
+    queryKey: ['portfolio-review'],
+    queryFn: apiGetPortfolioReview,
+    enabled: false,
+    retry: false,
+  })
+
+  function addRow() { setRows(r => [...r, { ticker: '', shares: 0, avg_cost: 0 }]) }
+  function removeRow(i: number) { setRows(r => r.filter((_, idx) => idx !== i)) }
   function updateRow(i: number, field: keyof HoldingInput, value: string) {
     setRows(r => r.map((row, idx) =>
       idx !== i ? row : { ...row, [field]: field === 'ticker' ? value.toUpperCase() : parseFloat(value) || 0 }
@@ -168,20 +293,39 @@ export function PortfolioPage() {
   function handleAnalyse() {
     const valid = rows.filter(r => r.ticker.trim() && r.shares > 0 && r.avg_cost > 0)
     if (!valid.length) return
-    mut.mutate(valid)
+    analyzeMut.mutate(valid)
   }
 
-  const s = result?.summary
+  function handleSave() {
+    const valid = rows.filter(r => r.ticker.trim() && r.shares > 0 && r.avg_cost > 0)
+    if (!valid.length) return
+    saveMut.mutate(valid)
+  }
+
+  function handleGetReview() {
+    setTab('review')
+    reviewQuery.refetch()
+  }
+
+  const s  = result?.summary
+  const rv = reviewQuery.data
 
   return (
     <div className="min-h-screen bg-canvas">
       <div className="max-w-6xl mx-auto px-4 py-6 space-y-6">
 
-        <div>
-          <h1 className="text-2xl font-bold text-ink">Portfolio Analyzer</h1>
-          <p className="text-sm text-ink-muted mt-0.5">
-            Enter your holdings to get P&L, portfolio beta, and sector allocation
-          </p>
+        <div className="flex items-start justify-between flex-wrap gap-3">
+          <div>
+            <h1 className="text-2xl font-bold text-ink">Portfolio Analyzer</h1>
+            <p className="text-sm text-ink-muted mt-0.5">
+              Enter holdings · save to get daily email review · click "Daily Review" for today's action plan
+            </p>
+          </div>
+          {savedData?.holdings?.length ? (
+            <div className="text-xs text-green-700 dark:text-green-400 bg-green-50 dark:bg-green-950/30 px-3 py-1.5 rounded-lg border border-green-200 dark:border-green-800">
+              Portfolio saved · included in daily digest
+            </div>
+          ) : null}
         </div>
 
         {/* Holdings input table */}
@@ -232,25 +376,44 @@ export function PortfolioPage() {
             </table>
           </div>
 
-          <div className="px-5 py-4 border-t border-surface-border">
-            <button
-              onClick={handleAnalyse}
-              disabled={mut.isPending}
-              className="px-5 py-2 rounded-lg bg-primary text-white font-semibold text-sm disabled:opacity-50 hover:bg-primary/90 transition-colors"
-            >
-              {mut.isPending ? 'Analysing…' : 'Analyse Portfolio'}
+          <div className="px-5 py-4 border-t border-surface-border flex items-center gap-3 flex-wrap">
+            <button onClick={handleAnalyse} disabled={analyzeMut.isPending}
+              className="px-5 py-2 rounded-lg bg-primary text-white font-semibold text-sm disabled:opacity-50 hover:bg-primary/90 transition-colors">
+              {analyzeMut.isPending ? 'Analysing…' : 'Analyse Portfolio'}
             </button>
-            {mut.isError && (
-              <span className="ml-3 text-xs text-red-500">Analysis failed. Check your tickers and try again.</span>
+            <button onClick={handleSave} disabled={saveMut.isPending}
+              className="px-5 py-2 rounded-lg border border-primary text-primary font-semibold text-sm disabled:opacity-50 hover:bg-primary/10 transition-colors">
+              {saveMut.isPending ? 'Saving…' : 'Save Portfolio'}
+            </button>
+            <button onClick={handleGetReview}
+              disabled={reviewQuery.isFetching}
+              className="px-5 py-2 rounded-lg bg-green-600 text-white font-semibold text-sm disabled:opacity-50 hover:bg-green-700 transition-colors">
+              {reviewQuery.isFetching ? 'Scoring…' : 'Get Daily Review'}
+            </button>
+            {analyzeMut.isError && (
+              <span className="text-xs text-red-500">Analysis failed. Check your tickers.</span>
             )}
+            {saveMsg && <span className="text-xs text-green-600">{saveMsg}</span>}
+            {saveMut.isError && <span className="text-xs text-red-500">Save failed.</span>}
           </div>
         </div>
 
-        {/* Results */}
-        {result && s && (
-          <div className="space-y-6">
+        {/* Tabs */}
+        {(result || rv) && (
+          <div className="flex gap-1 bg-surface-muted rounded-xl p-1 w-fit">
+            {(['holdings', 'review'] as Tab[]).map(t => (
+              <button key={t} onClick={() => setTab(t)}
+                className={clsx('px-4 py-1.5 rounded-lg text-sm font-medium transition-colors',
+                  tab === t ? 'bg-surface text-ink shadow-sm' : 'text-ink-muted hover:text-ink')}>
+                {t === 'holdings' ? 'P&L Overview' : 'Daily Review'}
+              </button>
+            ))}
+          </div>
+        )}
 
-            {/* Summary cards */}
+        {/* P&L Overview Tab */}
+        {tab === 'holdings' && result && s && (
+          <div className="space-y-6">
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
               {[
                 { label: 'Portfolio Value', value: fmt$(s.total_value), sub: `Cost ${fmt$(s.total_cost)}` },
@@ -267,7 +430,6 @@ export function PortfolioPage() {
               ))}
             </div>
 
-            {/* Sector breakdown + top weights */}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
               <div className="bg-surface rounded-2xl border border-surface-border shadow-card p-5">
                 <h3 className="text-sm font-semibold text-ink mb-4">Sector Allocation</h3>
@@ -291,21 +453,16 @@ export function PortfolioPage() {
               </div>
             </div>
 
-            {/* Holdings detail table */}
             <div className="bg-surface rounded-2xl border border-surface-border shadow-card overflow-hidden">
               <div className="px-5 py-4 border-b border-surface-border">
                 <span className="font-semibold text-ink text-sm">Holdings Detail</span>
               </div>
               <div className="overflow-x-auto">
                 <div className="min-w-[700px]">
-                  {/* Table header */}
                   <div className="grid grid-cols-[80px_1fr_80px_80px_80px_80px_60px] gap-2 px-5 py-2 text-xs text-ink-faint uppercase tracking-wide border-b border-surface-border">
-                    <span>Ticker</span>
-                    <span>Company</span>
-                    <span className="text-right">Price</span>
-                    <span className="text-right">Value</span>
-                    <span className="text-right">Cost</span>
-                    <span className="text-right">P&L</span>
+                    <span>Ticker</span><span>Company</span>
+                    <span className="text-right">Price</span><span className="text-right">Value</span>
+                    <span className="text-right">Cost</span><span className="text-right">P&L</span>
                     <span className="text-right">Beta</span>
                   </div>
                   <div className="px-5">
@@ -318,6 +475,128 @@ export function PortfolioPage() {
             <p className="text-xs text-ink-faint text-center">
               Prices from Yahoo Finance · ~15 min delay during market hours · Not investment advice
             </p>
+          </div>
+        )}
+
+        {/* Daily Review Tab */}
+        {tab === 'review' && (
+          <div className="space-y-6">
+            {reviewQuery.isFetching && (
+              <div className="bg-surface rounded-2xl border border-surface-border shadow-card p-8 text-center">
+                <div className="text-ink-muted text-sm">Scoring your holdings — this takes 20–60 seconds…</div>
+                <div className="mt-3 flex justify-center gap-1">
+                  {[0, 1, 2].map(i => (
+                    <div key={i} className="w-2 h-2 bg-primary rounded-full animate-bounce"
+                      style={{ animationDelay: `${i * 0.15}s` }} />
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {reviewQuery.isError && !reviewQuery.isFetching && (
+              <div className="bg-red-50 dark:bg-red-950/20 border border-red-200 dark:border-red-800 rounded-2xl p-5 text-sm text-red-700 dark:text-red-400">
+                Could not load review. Save your portfolio first, then try again.
+              </div>
+            )}
+
+            {rv && !reviewQuery.isFetching && (
+              <>
+                {/* Health + summary */}
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+                  {/* Health score */}
+                  <div className="bg-surface rounded-2xl border border-surface-border shadow-card p-4">
+                    <div className="text-xs text-ink-faint uppercase tracking-wide mb-1">Portfolio Health</div>
+                    <div className={clsx('text-xl font-bold',
+                      rv.summary.health_score >= 65 ? 'text-green-600 dark:text-green-400' :
+                      rv.summary.health_score >= 50 ? 'text-blue-600 dark:text-blue-400' :
+                      rv.summary.health_score >= 35 ? 'text-amber-600 dark:text-amber-400' :
+                      'text-red-600 dark:text-red-400')}>
+                      {rv.summary.health_score.toFixed(0)}/100
+                    </div>
+                    <div className="text-xs text-ink-muted mt-0.5">{rv.summary.num_holdings} holdings scored</div>
+                  </div>
+
+                  {/* P&L */}
+                  <div className="bg-surface rounded-2xl border border-surface-border shadow-card p-4">
+                    <div className="text-xs text-ink-faint uppercase tracking-wide mb-1">Total P&L</div>
+                    <div className={clsx('text-xl font-bold', pnlColor(rv.summary.total_pnl))}>
+                      {fmt$(rv.summary.total_pnl)}
+                    </div>
+                    <div className={clsx('text-xs mt-0.5', pnlColor(rv.summary.total_pnl_pct))}>
+                      {pct(rv.summary.total_pnl_pct)}
+                    </div>
+                  </div>
+
+                  {/* Action counts */}
+                  {(['sell', 'add_more'] as PortfolioAction[]).map(a => {
+                    const count = rv.summary.action_counts[a] ?? 0
+                    const s = ACTION_STYLES[a]
+                    return (
+                      <div key={a} className="bg-surface rounded-2xl border border-surface-border shadow-card p-4">
+                        <div className="text-xs text-ink-faint uppercase tracking-wide mb-1">
+                          {a === 'sell' ? 'Exit Signals' : 'Add More'}
+                        </div>
+                        <div className={clsx('text-xl font-bold', s.text.split(' ')[0])}>{count}</div>
+                        <div className="text-xs text-ink-muted mt-0.5">
+                          {a === 'sell' ? 'holdings to exit' : 'conviction adds'}
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+
+                {/* Top recommendation */}
+                <div className="bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800 rounded-2xl p-4">
+                  <div className="text-xs font-bold text-blue-600 dark:text-blue-400 uppercase tracking-wide mb-1">
+                    Today's Top Recommendation
+                  </div>
+                  <div className="text-sm text-ink">{rv.summary.top_recommendation}</div>
+                </div>
+
+                {/* Holdings review table */}
+                <div className="bg-surface rounded-2xl border border-surface-border shadow-card overflow-hidden">
+                  <div className="px-5 py-4 border-b border-surface-border flex items-center justify-between">
+                    <span className="font-semibold text-ink text-sm">Holding-by-Holding Action Plan</span>
+                    <span className="text-xs text-ink-faint">Click a row to see the reasoning</span>
+                  </div>
+                  <div className="overflow-x-auto">
+                    <div className="min-w-[700px] px-5">
+                      {/* Header */}
+                      <div className="grid grid-cols-[80px_1fr_110px_140px_80px_80px] gap-2 py-2 text-xs text-ink-faint uppercase tracking-wide border-b border-surface-border">
+                        <span>Ticker</span>
+                        <span>Company</span>
+                        <span>Action</span>
+                        <span>Scores</span>
+                        <span className="text-center">RS</span>
+                        <span className="text-right">P&L</span>
+                      </div>
+                      {rv.holdings.map(h => (
+                        <ScoredHoldingRow key={h.ticker} h={h as ScoredHolding} />
+                      ))}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Legend */}
+                <div className="flex flex-wrap gap-3 justify-center text-xs text-ink-muted">
+                  {(Object.entries(ACTION_STYLES) as [PortfolioAction, typeof ACTION_STYLES[PortfolioAction]][]).map(([a, s]) => (
+                    <div key={a} className={clsx('flex items-center gap-1.5 px-2.5 py-1 rounded-full', s.bg, s.text)}>
+                      <span className="font-bold">{s.label}</span>
+                      <span className="opacity-70">—</span>
+                      <span>{a === 'add_more' ? 'Strong signals — build position' :
+                             a === 'hold'     ? 'Neutral — stay the course' :
+                             a === 'reduce'   ? 'Trim risk or protect gains' :
+                             'Exit — poor momentum'}</span>
+                    </div>
+                  ))}
+                </div>
+
+                <p className="text-xs text-ink-faint text-center">
+                  Scores based on technical momentum (ST), fundamental quality (LT), and relative strength vs SPY (RS).
+                  Not investment advice · ~15 min delayed data
+                </p>
+              </>
+            )}
           </div>
         )}
       </div>
