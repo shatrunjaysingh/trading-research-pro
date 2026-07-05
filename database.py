@@ -258,6 +258,18 @@ _SCHEMA_STATEMENTS = [
     )
     """,
     "CREATE INDEX IF NOT EXISTS idx_watchlist_user ON watchlists(user_id)",
+    # Daily digest subscriptions & run log
+    "ALTER TABLE users ADD COLUMN IF NOT EXISTS digest_enabled BOOLEAN DEFAULT FALSE",
+    """
+    CREATE TABLE IF NOT EXISTS digest_runs (
+        id          SERIAL PRIMARY KEY,
+        run_date    DATE NOT NULL UNIQUE,
+        st_count    INTEGER DEFAULT 0,
+        lt_count    INTEGER DEFAULT 0,
+        users_sent  INTEGER DEFAULT 0,
+        created_at  TIMESTAMPTZ DEFAULT NOW()
+    )
+    """,
     "ALTER TABLE users ADD COLUMN IF NOT EXISTS preferences JSONB DEFAULT '{}'::jsonb",
     "ALTER TABLE users ADD COLUMN IF NOT EXISTS consent_at TIMESTAMPTZ",
     "ALTER TABLE users ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ",
@@ -1323,6 +1335,48 @@ def is_in_watchlist(user_id: int, ticker: str) -> bool:
             (user_id, ticker.upper()),
         )
         return cur.fetchone() is not None
+
+
+# ---------------------------------------------------------------------------
+# Digest helpers
+# ---------------------------------------------------------------------------
+
+def get_digest_subscribers() -> list[dict]:
+    """Return all users with digest_enabled=True and a valid email."""
+    with get_db() as conn:
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute(
+            "SELECT id, email, username, full_name FROM users WHERE digest_enabled = TRUE AND is_active = TRUE AND email <> ''",
+        )
+        return [dict(r) for r in cur.fetchall()]
+
+
+def set_digest_enabled(user_id: int, enabled: bool) -> bool:
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute("UPDATE users SET digest_enabled = %s WHERE id = %s", (enabled, user_id))
+        return cur.rowcount > 0
+
+
+def get_all_watchlist_tickers() -> list[str]:
+    """Return all distinct tickers across all watchlists (for digest universe)."""
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT DISTINCT ticker FROM watchlists")
+        return [r[0] for r in cur.fetchall()]
+
+
+def log_digest_run(run_date, st_count: int, lt_count: int, users_sent: int) -> None:
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """INSERT INTO digest_runs (run_date, st_count, lt_count, users_sent)
+               VALUES (%s, %s, %s, %s)
+               ON CONFLICT (run_date) DO UPDATE
+               SET st_count=EXCLUDED.st_count, lt_count=EXCLUDED.lt_count,
+                   users_sent=EXCLUDED.users_sent, created_at=NOW()""",
+            (run_date, st_count, lt_count, users_sent),
+        )
 
 
 # ---------------------------------------------------------------------------

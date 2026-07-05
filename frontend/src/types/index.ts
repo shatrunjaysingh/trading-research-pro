@@ -458,6 +458,31 @@ export interface StockAnalysisResult {
   position_size?: PositionSize | null
   regime?: MarketRegime | null
   patterns?: TechnicalPattern[]
+  rs_rating?: RSRating | null
+  weekly?: WeeklyConfirmation | null
+  st_analysis?: HorizonAnalysis | null
+  lt_analysis?: HorizonAnalysis | null
+}
+
+export interface RSRating {
+  rs_score: number
+  vs_spy_3m: number | null
+  vs_spy_6m: number | null
+  vs_spy_12m: number | null
+  stock_3m_return: number | null
+  stock_12m_return: number | null
+}
+
+export interface WeeklyConfirmation {
+  rsi_w: number | null
+  macd_above_signal_w: boolean | null
+  trend_w: 'up' | 'down' | null
+}
+
+export interface HorizonAnalysis {
+  score: number
+  signal: string
+  reasoning: string[]
 }
 
 export type StockSSEEvent =

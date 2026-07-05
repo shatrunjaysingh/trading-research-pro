@@ -13,7 +13,7 @@ import {
   StockAnalysisResult, TechnicalSnapshot, FundamentalSnapshot,
   AnalystSnapshot, IndicatorKey, StockAnalysisRequest,
   SecInsiderTransaction, SecInsiderSummary, SecRecentFiling,
-  TechnicalPattern,
+  TechnicalPattern, RSRating, HorizonAnalysis,
 } from '../types'
 import { clsx } from 'clsx'
 import { InfoTooltip } from '../components/ui/InfoTooltip'
@@ -1123,6 +1123,114 @@ function StockChatPanel({ result, currency = '$' }: { result: StockAnalysisResul
   )
 }
 
+// ── RS Rating Panel ───────────────────────────────────────────────────────────
+
+function RSRatingBadge({ rs }: { rs: RSRating }) {
+  const score = rs.rs_score
+  const color = score >= 90 ? '#16a34a' : score >= 80 ? '#22c55e' : score >= 70 ? '#3b82f6'
+    : score >= 50 ? '#eab308' : '#ef4444'
+  const label = score >= 90 ? 'Elite' : score >= 80 ? 'Strong' : score >= 70 ? 'Above Avg'
+    : score >= 50 ? 'Average' : 'Lagging'
+
+  return (
+    <div className="flex items-center gap-3 bg-surface rounded-xl border border-surface-border px-4 py-3">
+      {/* Circular score */}
+      <div className="relative flex-shrink-0">
+        <svg width="56" height="56">
+          <circle cx="28" cy="28" r="24" fill="none" stroke="var(--color-surface-muted)" strokeWidth="5" />
+          <circle cx="28" cy="28" r="24" fill="none" stroke={color} strokeWidth="5"
+            strokeDasharray={`${score / 100 * 150.8} 150.8`}
+            strokeLinecap="round" transform="rotate(-90 28 28)" />
+          <text x="28" y="33" textAnchor="middle" fontSize="14" fontWeight="bold" fill={color}>{score}</text>
+        </svg>
+      </div>
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-2">
+          <span className="text-sm font-bold text-ink">RS Rating</span>
+          <span className="text-xs px-2 py-0.5 rounded-full font-semibold" style={{ backgroundColor: color + '20', color }}>{label}</span>
+        </div>
+        <p className="text-xs text-ink-faint mt-0.5">Relative Strength vs S&P 500 (1 = worst, 99 = best)</p>
+        <div className="flex gap-3 mt-1 text-xs text-ink-muted flex-wrap">
+          {rs.vs_spy_3m != null && (
+            <span className={rs.vs_spy_3m >= 0 ? 'text-green-600' : 'text-red-500'}>
+              3m: {rs.vs_spy_3m >= 0 ? '+' : ''}{rs.vs_spy_3m.toFixed(1)}% vs SPY
+            </span>
+          )}
+          {rs.vs_spy_12m != null && (
+            <span className={rs.vs_spy_12m >= 0 ? 'text-green-600' : 'text-red-500'}>
+              12m: {rs.vs_spy_12m >= 0 ? '+' : ''}{rs.vs_spy_12m.toFixed(1)}% vs SPY
+            </span>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ── Horizon Analysis Panel (ST + LT) ─────────────────────────────────────────
+
+function HorizonPanel({ st, lt }: { st: HorizonAnalysis | null | undefined; lt: HorizonAnalysis | null | undefined }) {
+  if (!st && !lt) return null
+
+  const signalColor = (sig: string) =>
+    sig === 'strong buy' ? 'text-green-700 dark:text-green-400 bg-green-100 dark:bg-green-900/30'
+    : sig === 'buy' ? 'text-green-600 dark:text-green-400 bg-green-50 dark:bg-green-900/20'
+    : sig === 'watch' ? 'text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-900/20'
+    : sig === 'hold' ? 'text-yellow-600 dark:text-yellow-400 bg-yellow-50 dark:bg-yellow-900/20'
+    : 'text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20'
+
+  function HorizonCard({ analysis, horizon, label, desc }: {
+    analysis: HorizonAnalysis; horizon: string; label: string; desc: string
+  }) {
+    const barColor = analysis.score >= 65 ? 'bg-green-500' : analysis.score >= 52 ? 'bg-blue-500'
+      : analysis.score >= 38 ? 'bg-yellow-500' : 'bg-red-500'
+    return (
+      <div className="bg-surface rounded-xl border border-surface-border p-4 flex-1 min-w-0">
+        <div className="flex items-start justify-between gap-2 mb-3">
+          <div>
+            <div className="text-xs font-bold text-ink-faint uppercase tracking-wider">{label}</div>
+            <div className="text-xs text-ink-faint mt-0.5">{desc}</div>
+          </div>
+          <span className={clsx('text-xs px-2.5 py-1 rounded-full font-bold flex-shrink-0', signalColor(analysis.signal))}>
+            {analysis.signal.toUpperCase()}
+          </span>
+        </div>
+        {/* Score bar */}
+        <div className="mb-3">
+          <div className="flex justify-between text-xs mb-1">
+            <span className="text-ink-faint">Score</span>
+            <span className="font-bold text-ink">{analysis.score.toFixed(0)}/100</span>
+          </div>
+          <div className="h-2 bg-surface-muted rounded-full overflow-hidden">
+            <div className={clsx('h-full rounded-full', barColor)} style={{ width: `${analysis.score}%` }} />
+          </div>
+        </div>
+        {/* Top reasons */}
+        {analysis.reasoning.length > 0 && (
+          <ul className="space-y-1.5">
+            {analysis.reasoning.slice(0, 4).map((r, i) => (
+              <li key={i} className="flex items-start gap-1.5 text-xs text-ink-muted">
+                <span className="text-green-500 flex-shrink-0 mt-0.5">•</span>
+                <span>{r}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    )
+  }
+
+  return (
+    <div className="space-y-2">
+      <div className="text-xs font-bold text-ink-faint uppercase tracking-widest px-1">Investment Horizon Analysis</div>
+      <div className="flex gap-3 flex-col sm:flex-row">
+        {st && <HorizonCard analysis={st} horizon="st" label="Short-Term (1–4 weeks)" desc="Technical momentum + RS rating + multi-timeframe" />}
+        {lt && <HorizonCard analysis={lt} horizon="lt" label="Long-Term (3–12 months)" desc="Fundamental quality + RS rating + trend structure" />}
+      </div>
+    </div>
+  )
+}
+
 // ── Patterns Panel ────────────────────────────────────────────────────────────
 
 function PatternsPanel({ patterns }: { patterns: TechnicalPattern[] }) {
@@ -1734,6 +1842,28 @@ export function StockAnalysisPage() {
 
             {/* Summary banner — signal + score + confidence at a glance */}
             <ResultBanner result={result} onRefresh={() => handleRun(true)} currency={currency} />
+
+            {/* RS Rating + Horizon scores — most important decision metrics */}
+            <div className="flex flex-col sm:flex-row gap-3">
+              {result.rs_rating && <div className="flex-1"><RSRatingBadge rs={result.rs_rating} /></div>}
+              {(result.weekly?.trend_w) && (
+                <div className={clsx(
+                  'flex items-center gap-2 px-4 py-3 rounded-xl border text-sm font-medium flex-shrink-0',
+                  result.weekly.trend_w === 'up'
+                    ? 'bg-green-50 border-green-200 text-green-700 dark:bg-green-900/20 dark:border-green-700 dark:text-green-400'
+                    : 'bg-red-50 border-red-200 text-red-700 dark:bg-red-900/20 dark:border-red-700 dark:text-red-400'
+                )}>
+                  {result.weekly.trend_w === 'up' ? '📈' : '📉'}
+                  <span>Weekly trend: <strong>{result.weekly.trend_w === 'up' ? 'Uptrend' : 'Downtrend'}</strong></span>
+                  {result.weekly.macd_above_signal_w != null && (
+                    <span className="text-xs opacity-70">· MACD {result.weekly.macd_above_signal_w ? '▲' : '▼'}</span>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* Short-term + Long-term horizon analysis */}
+            <HorizonPanel st={result.st_analysis} lt={result.lt_analysis} />
 
             {/* Price history chart */}
             <StockChartPanel

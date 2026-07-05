@@ -226,6 +226,239 @@ def _signal_from_indicators(tech: dict) -> tuple[str, float, float]:
     return signal, score, confidence
 
 
+def _compute_weekly_confirmation(ticker: str) -> dict:
+    """
+    Fetch weekly bars and compute RSI + MACD on weekly timeframe.
+    Returns: {rsi_w, macd_above_signal_w, trend_w}
+    Weekly confirmation lifts conviction when it agrees with daily signal.
+    """
+    try:
+        import yfinance as yf
+        hist = yf.Ticker(ticker.upper()).history(period="2y", interval="1wk")
+        if len(hist) < 30:
+            return {}
+        closes = hist["Close"].dropna().tolist()
+        rsi_w  = _compute_rsi(closes, period=14)
+        m, ms, _ = _compute_macd(closes)
+        macd_above = (m > ms) if (m is not None and ms is not None) else None
+        # Determine weekly trend
+        sma20w = _compute_sma(closes, 20)
+        price  = closes[-1] if closes else None
+        trend  = "up" if (price and sma20w and price > sma20w) else "down"
+        return {"rsi_w": rsi_w, "macd_above_signal_w": macd_above, "trend_w": trend}
+    except Exception:
+        return {}
+
+
+def _compute_st_score(tech: dict, rs_score: int, weekly: dict) -> dict:
+    """
+    Short-term score (1–4 week horizon).
+    Optimised for momentum + near-term catalyst capture.
+
+    Returns: {score, signal, reasoning[]}
+    """
+    score = 50.0
+    reasons: list[str] = []
+
+    # RSI: ideal zone for continuation is 50–65 (not overbought but building momentum)
+    rsi = tech.get("rsi")
+    if rsi is not None:
+        if 50 <= rsi <= 65:
+            score += 15; reasons.append(f"RSI {rsi:.0f} in ideal momentum zone")
+        elif 40 <= rsi < 50:
+            score += 8;  reasons.append(f"RSI {rsi:.0f} — neutral, watching")
+        elif rsi < 30:
+            score += 12; reasons.append(f"RSI {rsi:.0f} — oversold bounce candidate")
+        elif rsi > 70:
+            score -= 12; reasons.append(f"RSI {rsi:.0f} — overbought, pullback risk")
+
+    # MACD bullish crossover / positive histogram
+    macd     = tech.get("macd")
+    macd_sig = tech.get("macd_signal")
+    macd_h   = tech.get("macd_hist")
+    if macd is not None and macd_sig is not None:
+        if macd > macd_sig:
+            score += 12; reasons.append("MACD above signal — bullish momentum")
+        else:
+            score -= 10; reasons.append("MACD below signal — bearish momentum")
+    if macd_h is not None and macd_h > 0:
+        score += 3  # histogram expanding = acceleration
+
+    # Price vs 50-day SMA (key short-term support/resistance)
+    price = tech.get("current_price")
+    sma50 = tech.get("sma50")
+    if price and sma50:
+        pct_above = (price - sma50) / sma50 * 100
+        if 0 < pct_above <= 8:
+            score += 12; reasons.append(f"Price {pct_above:.1f}% above 50-day MA — healthy uptrend")
+        elif pct_above > 8:
+            score += 6;  reasons.append(f"Price {pct_above:.1f}% above 50-day MA — extended")
+        else:
+            score -= 10; reasons.append("Price below 50-day MA — short-term downtrend")
+
+    # Volume confirmation
+    vol_ratio = tech.get("vol_ratio")
+    if vol_ratio:
+        if vol_ratio >= 1.5:
+            score += 8; reasons.append(f"Volume {vol_ratio:.1f}x average — institutional interest")
+        elif vol_ratio < 0.7:
+            score -= 4; reasons.append("Low volume — conviction lacking")
+
+    # Volume trend (accumulation vs distribution)
+    vol_signal = tech.get("vol_signal")
+    if vol_signal == "accumulation":
+        score += 5; reasons.append("30-day volume trend: accumulation")
+    elif vol_signal == "distribution":
+        score -= 5; reasons.append("30-day volume trend: distribution")
+
+    # Day change momentum
+    day_chg = tech.get("day_change_pct")
+    if day_chg is not None:
+        score += min(max(day_chg * 2, -8), 8)
+
+    # Weekly confirmation (adds high-conviction bonus)
+    rsi_w = weekly.get("rsi_w")
+    macd_w = weekly.get("macd_above_signal_w")
+    trend_w = weekly.get("trend_w")
+    if trend_w == "up":
+        if macd_w:
+            score += 8; reasons.append("Weekly trend + MACD both bullish — strong alignment")
+        else:
+            score += 3; reasons.append("Weekly trend bullish")
+    elif trend_w == "down":
+        score -= 8; reasons.append("Weekly trend bearish — fighting headwind")
+
+    # RS Rating bonus (strong relative performers tend to keep outperforming)
+    if rs_score >= 90:
+        score += 12; reasons.append(f"RS Rating {rs_score} — elite relative strength (top 10%)")
+    elif rs_score >= 80:
+        score += 8;  reasons.append(f"RS Rating {rs_score} — strong relative strength")
+    elif rs_score >= 70:
+        score += 4;  reasons.append(f"RS Rating {rs_score} — above average")
+    elif rs_score < 40:
+        score -= 8;  reasons.append(f"RS Rating {rs_score} — lagging the market")
+
+    score = round(max(0, min(100, score)), 1)
+    signal = "strong buy" if score >= 78 else "buy" if score >= 65 else "watch" if score >= 52 else "hold" if score >= 38 else "sell"
+    return {"score": score, "signal": signal, "reasoning": reasons}
+
+
+def _compute_lt_score(tech: dict, fund: dict, rs_score: int) -> dict:
+    """
+    Long-term score (3–12 month horizon).
+    Focus: fundamental quality + relative strength + trend structure.
+
+    Returns: {score, signal, reasoning[]}
+    """
+    score = 50.0
+    reasons: list[str] = []
+
+    # ── Fundamental Quality (50 pts max) ──────────────────────────────────────
+
+    # EPS growth (key growth signal)
+    eps_growth = fund.get("eps_growth")
+    if eps_growth is not None:
+        if eps_growth > 0.5:
+            score += 18; reasons.append(f"EPS growth {eps_growth*100:.0f}% — exceptional growth")
+        elif eps_growth > 0.25:
+            score += 14; reasons.append(f"EPS growth {eps_growth*100:.0f}% — strong growth")
+        elif eps_growth > 0.10:
+            score += 8;  reasons.append(f"EPS growth {eps_growth*100:.0f}% — moderate growth")
+        elif eps_growth < -0.10:
+            score -= 12; reasons.append(f"EPS growth {eps_growth*100:.0f}% — shrinking earnings")
+
+    # Revenue growth
+    rev_growth = fund.get("revenue_growth")
+    if rev_growth is not None:
+        if rev_growth > 0.20:
+            score += 10; reasons.append(f"Revenue growth {rev_growth*100:.0f}% — strong expansion")
+        elif rev_growth > 0.10:
+            score += 6;  reasons.append(f"Revenue growth {rev_growth*100:.0f}%")
+        elif rev_growth < -0.05:
+            score -= 8;  reasons.append(f"Revenue declining {rev_growth*100:.0f}%")
+
+    # ROE (management efficiency)
+    roe = fund.get("return_on_equity")
+    if roe is not None:
+        if roe > 0.25:
+            score += 10; reasons.append(f"ROE {roe*100:.0f}% — highly efficient management")
+        elif roe > 0.15:
+            score += 6;  reasons.append(f"ROE {roe*100:.0f}% — good capital allocation")
+        elif roe < 0:
+            score -= 8;  reasons.append("Negative ROE — unprofitable")
+
+    # Profit margins (quality of earnings)
+    margin = fund.get("profit_margin")
+    if margin is not None:
+        if margin > 0.20:
+            score += 8; reasons.append(f"Net margin {margin*100:.0f}% — highly profitable")
+        elif margin > 0.10:
+            score += 4; reasons.append(f"Net margin {margin*100:.0f}% — healthy")
+        elif margin < 0:
+            score -= 6; reasons.append("Negative margins — losing money")
+
+    # Valuation: forward vs trailing P/E (earnings expected to grow)
+    pe     = fund.get("pe_ratio")
+    fwd_pe = fund.get("forward_pe")
+    if pe and fwd_pe and pe > 0 and fwd_pe > 0:
+        if fwd_pe < pe * 0.85:
+            score += 8; reasons.append(f"Fwd P/E {fwd_pe:.0f}x < TTM P/E {pe:.0f}x — earnings expected to grow")
+        elif fwd_pe < pe:
+            score += 4; reasons.append("Earnings expected to improve")
+
+    # Debt (financial risk)
+    de = fund.get("debt_to_equity")
+    if de is not None:
+        if de < 0.3:
+            score += 6; reasons.append(f"Low debt ({de:.1f}x D/E) — financial flexibility")
+        elif de > 2.0:
+            score -= 8; reasons.append(f"High leverage ({de:.1f}x D/E) — financial risk")
+
+    # Short interest (contrarian signal — high short = bearish)
+    short_pct = fund.get("short_pct_float")
+    if short_pct is not None:
+        if short_pct > 0.20:
+            score -= 8; reasons.append(f"{short_pct*100:.0f}% short interest — heavy bearish bet against stock")
+        elif short_pct > 0.10:
+            score -= 4; reasons.append(f"{short_pct*100:.0f}% short interest — moderate bearish positioning")
+
+    # ── Technical structure for long term (20 pts max) ───────────────────────
+
+    price  = tech.get("current_price")
+    sma200 = tech.get("sma200")
+    sma50  = tech.get("sma50")
+
+    if price and sma200:
+        pct_above = (price - sma200) / sma200 * 100
+        if pct_above > 0:
+            score += 10; reasons.append(f"Price {pct_above:.1f}% above 200-day MA — long-term uptrend")
+        else:
+            score -= 10; reasons.append("Price below 200-day MA — long-term downtrend")
+
+    if price and sma50 and sma200:
+        if sma50 > sma200:
+            score += 5; reasons.append("Golden Cross in effect (SMA50 > SMA200)")
+        else:
+            score -= 5; reasons.append("Death Cross in effect (SMA50 < SMA200)")
+
+    # ── RS Rating (30 pts max) ────────────────────────────────────────────────
+
+    if rs_score >= 90:
+        score += 20; reasons.append(f"RS Rating {rs_score} — elite (top 10%). Strong stocks stay strong.")
+    elif rs_score >= 80:
+        score += 14; reasons.append(f"RS Rating {rs_score} — leader (top 20%)")
+    elif rs_score >= 70:
+        score += 8;  reasons.append(f"RS Rating {rs_score} — above average")
+    elif rs_score < 50:
+        score -= 8;  reasons.append(f"RS Rating {rs_score} — underperforming the market")
+    elif rs_score < 30:
+        score -= 15; reasons.append(f"RS Rating {rs_score} — significantly lagging")
+
+    score = round(max(0, min(100, score)), 1)
+    signal = "strong buy" if score >= 78 else "buy" if score >= 65 else "watch" if score >= 52 else "hold" if score >= 38 else "sell"
+    return {"score": score, "signal": signal, "reasoning": reasons}
+
+
 def _fetch_stock_data(
     ticker: str,
     period: str,
@@ -1096,6 +1329,40 @@ def analyze_stock_sync(
         result["patterns"] = _detect_patterns(ticker)
     except Exception:
         result["patterns"] = []
+
+    # ── RS Rating (Relative Strength vs S&P 500) ──────────────────────────────
+    rs_data: dict = {"rs_score": 50}
+    try:
+        from backend.services.rs_rating import compute_rs_rating
+        rs_data = compute_rs_rating(ticker)
+        result["rs_rating"] = rs_data
+    except Exception:
+        result["rs_rating"] = rs_data
+
+    rs_score = rs_data.get("rs_score", 50)
+
+    # ── Multi-timeframe weekly confirmation ───────────────────────────────────
+    weekly: dict = {}
+    try:
+        weekly = _compute_weekly_confirmation(ticker)
+        result["weekly"] = weekly
+    except Exception:
+        result["weekly"] = {}
+
+    # ── Short-term score (1–4 weeks, technical + RS) ──────────────────────────
+    try:
+        result["st_analysis"] = _compute_st_score(tech, rs_score, weekly)
+    except Exception:
+        result["st_analysis"] = None
+
+    # ── Long-term score (3–12 months, fundamentals + RS + trend) ─────────────
+    if include_fundamentals and result.get("fundamentals"):
+        try:
+            result["lt_analysis"] = _compute_lt_score(tech, result["fundamentals"], rs_score)
+        except Exception:
+            result["lt_analysis"] = None
+    else:
+        result["lt_analysis"] = None
 
     if mode == "api":
         fund_for_ai    = result.get("fundamentals") or {}

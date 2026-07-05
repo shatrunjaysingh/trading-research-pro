@@ -1,7 +1,8 @@
 import { useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useAuthStore } from '../store/auth'
 import { apiChangePassword, apiMyAudit, apiExportData, apiDeleteAccount } from '../api/profile'
+import { apiGetAlertPrefs, apiSetAlertPrefs } from '../api/alerts'
 import { RoleBadge, TierBadge } from '../components/ui/Badge'
 
 import type { User } from '../types'
@@ -30,7 +31,13 @@ export function ProfilePage() {
   const [deletePwd,  setDeletePwd]    = useState('')
   const [deleteErr,  setDeleteErr]    = useState('')
 
+  const qc = useQueryClient()
   const { data: audit = [] } = useQuery({ queryKey: ['my-audit'], queryFn: () => apiMyAudit(20) })
+  const { data: alertPrefs } = useQuery({ queryKey: ['alert-prefs'], queryFn: apiGetAlertPrefs })
+  const alertMut = useMutation({
+    mutationFn: (enabled: boolean) => apiSetAlertPrefs(enabled),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['alert-prefs'] }),
+  })
 
   const handleExport = async () => {
     setExportLoading(true)
@@ -134,6 +141,38 @@ export function ProfilePage() {
 
         {/* Right column */}
         <div className="space-y-5">
+
+          {/* Daily digest alerts */}
+          <div className="card p-5">
+            <h2 className="font-bold text-ink mb-1">Daily Market Digest</h2>
+            <p className="text-xs text-ink-muted mb-4">
+              Receive an email every weekday morning at 6am ET with the top short-term and long-term stock picks
+              screened from the S&P 100 + your watchlist. Includes RS ratings, scores, and reasoning for each pick.
+            </p>
+            <div className="flex items-center justify-between gap-4 bg-surface-muted rounded-xl px-4 py-3">
+              <div>
+                <div className="text-sm font-semibold text-ink">
+                  {alertPrefs?.digest_enabled ? '✅ Daily digest is ON' : '📬 Daily digest is OFF'}
+                </div>
+                <div className="text-xs text-ink-faint mt-0.5">Sent to: {user.email}</div>
+              </div>
+              <button
+                onClick={() => alertMut.mutate(!(alertPrefs?.digest_enabled ?? false))}
+                disabled={alertMut.isPending}
+                className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none disabled:opacity-50 ${
+                  alertPrefs?.digest_enabled ? 'bg-green-500' : 'bg-surface-border'
+                }`}
+              >
+                <span className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${
+                  alertPrefs?.digest_enabled ? 'translate-x-6' : 'translate-x-1'
+                }`} />
+              </button>
+            </div>
+            <p className="text-xs text-ink-faint mt-3">
+              Requires <strong>EMAIL_SENDER</strong> and <strong>EMAIL_APP_PASSWORD</strong> env vars to be set on the server (Gmail app password).
+            </p>
+          </div>
+
           {/* Change password */}
           <div className="card p-5">
             <h2 className="font-bold text-ink mb-4">Change Password</h2>
