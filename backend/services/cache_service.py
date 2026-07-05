@@ -45,6 +45,8 @@ def _ttl(mode: str) -> int:
 
 # ── Cache key ─────────────────────────────────────────────────────────────────
 
+CACHE_VERSION = 2  # increment whenever the result schema changes (busts all old entries)
+
 def make_cache_key(
     ticker: str,
     mode: str,
@@ -61,6 +63,7 @@ def make_cache_key(
     include_peers: bool,
 ) -> str:
     raw = json.dumps({
+        "v":  CACHE_VERSION,
         "t":  ticker.upper(),
         "m":  mode,
         "p":  time_period,
