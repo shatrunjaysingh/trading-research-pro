@@ -1428,11 +1428,18 @@ def save_user_portfolio(user_id: int, holdings: list[dict]) -> None:
     with get_db() as conn:
         with conn.cursor() as cur:
             cur.execute("DELETE FROM saved_portfolios WHERE user_id = %s", (user_id,))
+            seen: set[str] = set()
             for h in holdings:
+                t = h["ticker"].upper().strip()
+                if t in seen:
+                    continue
+                seen.add(t)
                 cur.execute(
                     """INSERT INTO saved_portfolios (user_id, ticker, shares, avg_cost, updated_at)
-                       VALUES (%s, %s, %s, %s, NOW())""",
-                    (user_id, h["ticker"].upper().strip(), float(h["shares"]), float(h["avg_cost"])),
+                       VALUES (%s, %s, %s, %s, NOW())
+                       ON CONFLICT (user_id, ticker) DO UPDATE
+                         SET shares = EXCLUDED.shares, avg_cost = EXCLUDED.avg_cost, updated_at = NOW()""",
+                    (user_id, t, float(h["shares"]), float(h["avg_cost"])),
                 )
 
 

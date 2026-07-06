@@ -478,7 +478,11 @@ export function PortfolioPage() {
               <span className="text-xs text-red-500">Analysis failed. Check your tickers.</span>
             )}
             {saveMsg && <span className="text-xs text-green-600">{saveMsg}</span>}
-            {saveMut.isError && <span className="text-xs text-red-500">Save failed.</span>}
+            {saveMut.isError && (
+              <span className="text-xs text-red-500">
+                Save failed: {(saveMut.error as any)?.response?.data?.detail || 'Please try again'}
+              </span>
+            )}
           </div>
         </div>
 
@@ -502,6 +506,13 @@ export function PortfolioPage() {
                  'Position Sizer'}
               </button>
             ))}
+          </div>
+        )}
+
+        {/* P&L: prompt to analyse first */}
+        {tab === 'holdings' && !result && (
+          <div className="card p-8 text-center text-ink-muted text-sm">
+            Click <strong>Analyse Portfolio</strong> above to see your P&amp;L overview.
           </div>
         )}
 
@@ -590,6 +601,12 @@ export function PortfolioPage() {
             {reviewQuery.isError && !reviewQuery.isFetching && (
               <div className="bg-red-50 dark:bg-red-950/20 border border-red-200 dark:border-red-800 rounded-2xl p-5 text-sm text-red-700 dark:text-red-400">
                 Could not load review. Save your portfolio first, then try again.
+              </div>
+            )}
+
+            {!reviewQuery.isFetching && !rv && !reviewQuery.isError && (
+              <div className="card p-8 text-center text-ink-muted text-sm">
+                Click <strong>Get Daily Review</strong> above to score your holdings and get action recommendations.
               </div>
             )}
 
@@ -693,6 +710,189 @@ export function PortfolioPage() {
             )}
           </div>
         )}
+
+        {/* Backtest Tab */}
+        {tab === 'backtest' && (
+          <div className="space-y-4">
+            {backtestQuery.isFetching && (
+              <div className="card p-8 text-center text-ink-muted text-sm">Loading historical performance data…</div>
+            )}
+            {backtestQuery.isError && !backtestQuery.isFetching && (
+              <div className="card p-5 text-red-600 text-sm">Failed to load backtest data. Save your portfolio first.</div>
+            )}
+            {!backtestQuery.isFetching && !backtestQuery.data && !backtestQuery.isError && (
+              <div className="card p-8 text-center text-ink-muted text-sm">
+                Click the <strong>Backtest</strong> tab to load historical return data for your holdings vs SPY.
+              </div>
+            )}
+            {backtestQuery.data && !backtestQuery.isFetching && (() => {
+              const bt = backtestQuery.data as BacktestResult
+              const spy = bt.spy
+              return (
+                <div className="card overflow-hidden">
+                  <div className="px-5 py-4 border-b border-surface-border">
+                    <span className="font-semibold text-ink text-sm">Historical Performance vs SPY</span>
+                  </div>
+                  <div className="overflow-x-auto">
+                    <div className="min-w-[680px] px-5">
+                      <div className="grid grid-cols-[100px_80px_80px_80px_80px_80px_80px] gap-2 py-2 text-xs text-ink-faint uppercase tracking-wide border-b border-surface-border">
+                        <span>Ticker</span>
+                        <span className="text-right">Since Buy</span>
+                        <span className="text-right">1W</span>
+                        <span className="text-right">1M</span>
+                        <span className="text-right">3M</span>
+                        <span className="text-right">6M</span>
+                        <span className="text-right">1Y</span>
+                      </div>
+                      {/* SPY reference row */}
+                      <div className="grid grid-cols-[100px_80px_80px_80px_80px_80px_80px] gap-2 py-2.5 border-b border-surface-border text-xs bg-surface-muted/30">
+                        <span className="font-bold text-ink-muted">SPY (Ref)</span>
+                        <span className="text-right text-ink-faint">—</span>
+                        {([spy.ret_1w, spy.ret_1m, spy.ret_3m, spy.ret_6m, spy.ret_1y] as (number | null)[]).map((v, i) => (
+                          <span key={i} className={clsx('text-right font-medium', v == null ? 'text-ink-faint' : v >= 0 ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400')}>
+                            {v == null ? '—' : `${v >= 0 ? '+' : ''}${v.toFixed(1)}%`}
+                          </span>
+                        ))}
+                      </div>
+                      {bt.holdings.map(h => (
+                        <div key={h.ticker} className="grid grid-cols-[100px_80px_80px_80px_80px_80px_80px] gap-2 py-2.5 border-b border-surface-border last:border-0 text-xs items-center">
+                          <span className="font-bold text-ink">{h.ticker}</span>
+                          {([h.since_purchase_pct, h.ret_1w, h.ret_1m, h.ret_3m, h.ret_6m, h.ret_1y] as (number | null)[]).map((v, i) => (
+                            <span key={i} className={clsx('text-right font-semibold', v == null ? 'text-ink-faint' : v >= 0 ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400')}>
+                              {v == null ? '—' : `${v >= 0 ? '+' : ''}${v.toFixed(1)}%`}
+                            </span>
+                          ))}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                  <p className="px-5 py-3 text-xs text-ink-faint border-t border-surface-border">
+                    "Since Buy" = return from avg cost basis to today · all other periods are trailing market returns
+                  </p>
+                </div>
+              )
+            })()}
+          </div>
+        )}
+
+        {/* Benchmark Tab */}
+        {tab === 'benchmark' && (
+          <div className="space-y-4">
+            {benchmarkQuery.isFetching && (
+              <div className="card p-8 text-center text-ink-muted text-sm">Loading benchmark comparison…</div>
+            )}
+            {benchmarkQuery.isError && !benchmarkQuery.isFetching && (
+              <div className="card p-5 text-red-600 text-sm">Failed to load benchmark data. Save your portfolio first.</div>
+            )}
+            {!benchmarkQuery.isFetching && !benchmarkQuery.data && !benchmarkQuery.isError && (
+              <div className="card p-8 text-center text-ink-muted text-sm">
+                Click <strong>Benchmark</strong> to compare your portfolio return vs SPY, QQQ, and other indices.
+              </div>
+            )}
+            {benchmarkQuery.data && !benchmarkQuery.isFetching && (() => {
+              const bm = benchmarkQuery.data as BenchmarkResult
+              return (
+                <div className="space-y-4">
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
+                    <div className="card p-4">
+                      <div className="text-xs text-ink-faint uppercase tracking-wide mb-1">Your Portfolio Return</div>
+                      <div className={clsx('text-2xl font-bold', bm.portfolio_return >= 0 ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400')}>
+                        {bm.portfolio_return >= 0 ? '+' : ''}{bm.portfolio_return.toFixed(1)}%
+                      </div>
+                      <div className="text-xs text-ink-faint mt-0.5">vs avg cost basis</div>
+                    </div>
+                    <div className="card p-4">
+                      <div className="text-xs text-ink-faint uppercase tracking-wide mb-1">Portfolio Value</div>
+                      <div className="text-2xl font-bold text-ink">{fmt$(bm.total_value)}</div>
+                      <div className="text-xs text-ink-faint mt-0.5">Cost: {fmt$(bm.total_cost)}</div>
+                    </div>
+                  </div>
+                  <div className="card overflow-hidden">
+                    <div className="px-5 py-4 border-b border-surface-border">
+                      <span className="font-semibold text-ink text-sm">Benchmark Comparison (trailing returns)</span>
+                    </div>
+                    <div className="overflow-x-auto">
+                      <div className="min-w-[580px] px-5">
+                        <div className="grid grid-cols-[160px_80px_80px_80px_80px_80px] gap-2 py-2 text-xs text-ink-faint uppercase tracking-wide border-b border-surface-border">
+                          <span>Benchmark</span>
+                          <span className="text-right">1W</span>
+                          <span className="text-right">1M</span>
+                          <span className="text-right">3M</span>
+                          <span className="text-right">6M</span>
+                          <span className="text-right">1Y</span>
+                        </div>
+                        {bm.benchmarks.map(b => (
+                          <div key={b.symbol} className="grid grid-cols-[160px_80px_80px_80px_80px_80px] gap-2 py-2.5 border-b border-surface-border last:border-0 text-xs items-center">
+                            <div>
+                              <div className="font-bold text-ink text-sm">{b.symbol}</div>
+                              <div className="text-ink-faint">{b.name}</div>
+                            </div>
+                            {([b.ret_1w, b.ret_1m, b.ret_3m, b.ret_6m, b.ret_1y] as (number | null)[]).map((v, i) => (
+                              <span key={i} className={clsx('text-right font-semibold', v == null ? 'text-ink-faint' : v >= 0 ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400')}>
+                                {v == null ? '—' : `${v >= 0 ? '+' : ''}${v.toFixed(1)}%`}
+                              </span>
+                            ))}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )
+            })()}
+          </div>
+        )}
+
+        {/* News Tab */}
+        {tab === 'news' && (
+          <div className="space-y-4">
+            {newsQuery.isFetching && (
+              <div className="card p-8 text-center text-ink-muted text-sm">Fetching news and scoring sentiment with AI…</div>
+            )}
+            {newsQuery.isError && !newsQuery.isFetching && (
+              <div className="card p-5 text-red-600 text-sm">Failed to load news. Save your portfolio first.</div>
+            )}
+            {!newsQuery.isFetching && !newsQuery.data && !newsQuery.isError && (
+              <div className="card p-8 text-center text-ink-muted text-sm">
+                Click <strong>News</strong> to load the latest news and AI sentiment for each holding.
+              </div>
+            )}
+            {newsQuery.data && !newsQuery.isFetching && (newsQuery.data as TickerNews[]).map(tn => (
+              <div key={tn.ticker} className="card overflow-hidden">
+                <div className="px-5 py-3 border-b border-surface-border flex items-center justify-between flex-wrap gap-2">
+                  <span className="font-bold text-ink text-base">{tn.ticker}</span>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className={clsx('text-xs px-2.5 py-0.5 rounded-full font-semibold capitalize',
+                      tn.sentiment === 'bullish' ? 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300' :
+                      tn.sentiment === 'bearish' ? 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300' :
+                      'bg-surface-muted text-ink-muted'
+                    )}>{tn.sentiment}</span>
+                    <span className="text-xs text-ink-faint">{tn.sentiment_reason}</span>
+                  </div>
+                </div>
+                <div className="px-5 py-3 space-y-1">
+                  {tn.articles.length === 0 && <div className="text-xs text-ink-faint py-2">No recent news found.</div>}
+                  {tn.articles.map((a, i) => (
+                    <a key={i} href={a.link} target="_blank" rel="noopener noreferrer"
+                      className="flex items-start gap-2 py-2 border-b border-surface-border last:border-0 hover:bg-surface-muted/50 rounded-lg px-2 -mx-2 transition-colors group">
+                      <div className="flex-1 min-w-0">
+                        <div className="text-sm text-ink font-medium leading-snug group-hover:text-primary">{a.title}</div>
+                        <div className="text-xs text-ink-faint mt-0.5">{a.publisher} · {a.published}</div>
+                      </div>
+                      <span className="text-ink-faint text-xs flex-shrink-0 mt-0.5">↗</span>
+                    </a>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Position Sizer Tab */}
+        {tab === 'sizer' && (
+          <PositionSizerPanel portfolioValue={result?.summary.total_value ?? (reviewQuery.data?.summary.total_value ?? 0)} />
+        )}
+
       </div>
     </div>
   )
