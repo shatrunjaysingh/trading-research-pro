@@ -296,3 +296,16 @@ def get_hist_backtest(admin: dict = Depends(_require_admin)):
     if not data:
         return {"message": "No historical backtest results yet. Run POST /admin/historical-backtest."}
     return data
+
+
+@router.post("/send-digest")
+def send_digest_now(admin: dict = Depends(_require_admin)):
+    """Trigger the daily email digest immediately (admin only)."""
+    try:
+        from backend.services.daily_digest import run_daily_digest
+        result = run_daily_digest(force=True)
+        return result
+    except Exception as exc:
+        import logging
+        logging.getLogger(__name__).error("Manual digest failed: %s", exc)
+        raise HTTPException(status_code=500, detail=str(exc))

@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { apiGetUsers, apiGetLicenses, apiGetAudit, apiCreateUser, apiUpdateUser, apiDeactivateUser, apiActivateUser, apiGetTokenUsage, apiGetBacktest, apiRunHistoricalBacktest, apiGetHistoricalBacktest, apiGetRegime } from '../api/admin'
+import { apiGetUsers, apiGetLicenses, apiGetAudit, apiCreateUser, apiUpdateUser, apiDeactivateUser, apiActivateUser, apiGetTokenUsage, apiGetBacktest, apiRunHistoricalBacktest, apiGetHistoricalBacktest, apiGetRegime, apiSendDigest } from '../api/admin'
 import { RoleBadge, TierBadge, StatusBadge } from '../components/ui/Badge'
 import { KpiCard } from '../components/ui/KpiCard'
 import { Spinner } from '../components/ui/Spinner'
@@ -16,6 +16,16 @@ function OverviewTab({ users, licenses }: { users: User[]; licenses: License[] }
   const now24h  = new Date(Date.now()-24*3600*1000).toISOString()
   const recent  = users.filter(u => u.last_login && u.last_login > now24h).length
 
+  const [digestResult, setDigestResult] = useState<string | null>(null)
+  const digestMut = useMutation({
+    mutationFn: apiSendDigest,
+    onSuccess: (data) => {
+      if (data.skipped) setDigestResult(`Skipped: ${data.reason}`)
+      else setDigestResult(`Sent to ${data.users_sent ?? 0} user(s). Picks: ${data.picks_count ?? 0}`)
+    },
+    onError: (e: unknown) => setDigestResult(`Error: ${(e as { response?: { data?: { detail?: string } } })?.response?.data?.detail ?? 'Unknown error'}`),
+  })
+
   return (
     <div className="space-y-6">
       <div className="flex gap-4 flex-wrap">
@@ -24,6 +34,30 @@ function OverviewTab({ users, licenses }: { users: User[]; licenses: License[] }
         <KpiCard value={recent}          label="Logins (24h)" />
         <KpiCard value={licenses.length} label="License Plans" />
       </div>
+      {/* Send Digest */}
+      <div className="card p-5 border-l-4 border-primary">
+        <div className="flex items-center justify-between flex-wrap gap-3">
+          <div>
+            <h3 className="font-bold text-ink">📧 Daily Email Digest</h3>
+            <p className="text-sm text-ink-muted mt-0.5">Send the top 5 stock picks email to all opted-in users right now (bypasses time/day check).</p>
+          </div>
+          <div className="flex items-center gap-3">
+            {digestResult && (
+              <span className={`text-sm font-semibold px-3 py-1.5 rounded-lg ${digestResult.startsWith('Error') ? 'bg-red-50 text-red-600' : 'bg-green-50 text-green-700'}`}>
+                {digestResult}
+              </span>
+            )}
+            <button
+              onClick={() => { setDigestResult(null); digestMut.mutate() }}
+              disabled={digestMut.isPending}
+              className="btn-primary disabled:opacity-50 flex items-center gap-2"
+            >
+              {digestMut.isPending ? <><Spinner /><span>Sending…</span></> : '📤 Send Digest Now'}
+            </button>
+          </div>
+        </div>
+      </div>
+
       <div className="grid grid-cols-2 gap-4">
         <div className="card p-4">
           <h3 className="font-bold text-sm mb-3">Users by Role</h3>

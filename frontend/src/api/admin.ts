@@ -36,3 +36,7 @@ export const apiRunHistoricalBacktest = (params?: { years_back?: number; top_n?:
   client.post('/admin/historical-backtest', null, { params, timeout: 120_000 }).then(r => r.data)
 export const apiGetHistoricalBacktest = () =>
   client.get('/admin/historical-backtest').then(r => r.data)
+
+// Send digest
+export const apiSendDigest = () =>
+  client.post('/admin/send-digest', null, { timeout: 120_000 }).then(r => r.data)
