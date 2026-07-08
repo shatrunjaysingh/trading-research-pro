@@ -15,6 +15,8 @@ import { AlertsPage }         from './pages/AlertsPage'
 import { EarningsPage }       from './pages/EarningsPage'
 import { SectorHeatmapPage }  from './pages/SectorHeatmapPage'
 import { OptionsPage }        from './pages/OptionsPage'
+import { ScreenerPage }      from './pages/ScreenerPage'
+import { JournalPage }       from './pages/JournalPage'
 
 // Silently refresh the user object in the background after mount.
 // If the token is stale, the 401 interceptor in client.ts handles the redirect.
@@ -63,6 +65,8 @@ export default function App() {
           <Route path="earnings"  element={<EarningsPage />} />
           <Route path="sectors"   element={<SectorHeatmapPage />} />
           <Route path="options"   element={<OptionsPage />} />
+          <Route path="screener"  element={<ScreenerPage />} />
+          <Route path="journal"   element={<JournalPage />} />
           <Route path="admin"     element={<AdminGuard><AdminPanel /></AdminGuard>} />
           <Route path="profile"   element={<ProfilePage />} />
         </Route>

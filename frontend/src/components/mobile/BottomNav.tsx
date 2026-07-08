@@ -5,9 +5,9 @@ import { useAuthStore } from '../../store/auth'
 const NAV_ITEMS = [
   { to: '/market',    label: 'Market',    icon: '🌐' },
   { to: '/stocks',    label: 'Stocks',    icon: '📊' },
-  { to: '/watchlist', label: 'Watchlist', icon: '👁' },
   { to: '/portfolio', label: 'Portfolio', icon: '💼' },
-  { to: '/profile',   label: 'Profile',   icon: '👤' },
+  { to: '/alerts',    label: 'Alerts',    icon: '🔔' },
+  { to: '/sectors',   label: 'Sectors',   icon: '🗺️' },
 ]
 
 export function BottomNav() {

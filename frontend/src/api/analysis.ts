@@ -102,6 +102,9 @@ export const fetchStockHistory = (ticker: string, period: string) =>
 export const fetchStockSnapshot = (ticker: string) =>
   client.get<import('../types').PickSnapshot>('/analysis/snapshot', { params: { ticker } }).then(r => r.data)
 
+export const apiGetPriceHistory = (ticker: string, period = '6mo') =>
+  client.get<{ ticker: string; period: string; data: import('../types').PriceBar[] }>(`/analysis/price-history/${ticker}`, { params: { period } }).then(r => r.data)
+
 export async function* streamStockAnalysis(
   params: StockAnalysisRequest,
 ): AsyncGenerator<StockSSEEvent> {

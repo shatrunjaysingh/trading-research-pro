@@ -3,11 +3,12 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   ComposedChart, Area, Bar, Line, XAxis, YAxis,
   CartesianGrid, Tooltip as RechartTooltip, ResponsiveContainer, LineChart,
+  ReferenceLine, Tooltip,
 } from 'recharts'
 import { useAuthStore } from '../store/auth'
 import { useMarketStore, useActiveExchanges } from '../store/market'
 import { COUNTRIES, formatTicker } from '../types/markets'
-import { streamStockAnalysis, fetchStockHistory, streamStockChat, ChatMsg } from '../api/analysis'
+import { streamStockAnalysis, fetchStockHistory, streamStockChat, ChatMsg, apiGetPriceHistory, fetchStockSnapshot } from '../api/analysis'
 import { apiAddToWatchlist, apiRemoveFromWatchlist, apiCheckWatchlist } from '../api/watchlist'
 import {
   StockAnalysisResult, TechnicalSnapshot, FundamentalSnapshot,
@@ -1359,6 +1360,22 @@ export function StockAnalysisPage() {
   const [error, setError] = useState<string | null>(null)
   const abortRef = useRef(false)
 
+  const [chartPeriod, setChartPeriod] = useState('6mo')
+  const { data: priceHistory, isLoading: chartLoading } = useQuery({
+    queryKey: ['price-history', ticker, chartPeriod],
+    queryFn: () => apiGetPriceHistory(ticker, chartPeriod),
+    enabled: !!ticker && ticker.length >= 1,
+    staleTime: 1000 * 60 * 15,
+  })
+
+  const { data: companySnap } = useQuery({
+    queryKey: ['company-snap', ticker],
+    queryFn: () => fetchStockSnapshot(ticker.trim().toUpperCase()),
+    enabled: !!ticker && ticker.trim().length >= 1,
+    staleTime: 1000 * 60 * 60,
+    retry: false,
+  })
+
   function toggleIndicator(key: IndicatorKey) {
     setIndicators(prev =>
       prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key],
@@ -1824,6 +1841,129 @@ export function StockAnalysisPage() {
           <div className="bg-red-50 border border-red-200 rounded-xl p-4 text-sm text-red-700">
             <span className="font-semibold">Error: </span>{error}
           </div>
+        )}
+
+        {/* Company brief card — shown as soon as snapshot data loads */}
+        {companySnap && (companySnap as any).company_name && (
+          <div className="card p-5">
+            <div className="flex items-start justify-between gap-4 flex-wrap">
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-lg font-extrabold text-ink">{(companySnap as any).company_name}</span>
+                  <span className="text-sm text-ink-faint font-mono">{ticker.toUpperCase()}</span>
+                  {(companySnap as any).sector && (
+                    <span className="text-xs px-2 py-0.5 rounded-full bg-primary/10 text-primary font-medium">
+                      {(companySnap as any).sector}
+                    </span>
+                  )}
+                  {(companySnap as any).industry && (
+                    <span className="text-xs px-2 py-0.5 rounded-full bg-surface-muted text-ink-muted font-medium">
+                      {(companySnap as any).industry}
+                    </span>
+                  )}
+                </div>
+
+                {(companySnap as any).description && (
+                  <p className="text-sm text-ink-muted mt-2 leading-relaxed line-clamp-4">
+                    {(companySnap as any).description}
+                  </p>
+                )}
+              </div>
+
+              {/* Key stats */}
+              <div className="flex flex-col gap-1.5 text-xs text-right flex-shrink-0">
+                {(companySnap as any).market_cap && (
+                  <div>
+                    <span className="text-ink-faint">Market Cap </span>
+                    <span className="font-semibold text-ink">
+                      {(companySnap as any).market_cap >= 1e12
+                        ? `$${((companySnap as any).market_cap / 1e12).toFixed(2)}T`
+                        : (companySnap as any).market_cap >= 1e9
+                        ? `$${((companySnap as any).market_cap / 1e9).toFixed(1)}B`
+                        : `$${((companySnap as any).market_cap / 1e6).toFixed(0)}M`}
+                    </span>
+                  </div>
+                )}
+                {(companySnap as any).employees && (
+                  <div>
+                    <span className="text-ink-faint">Employees </span>
+                    <span className="font-semibold text-ink">{Number((companySnap as any).employees).toLocaleString()}</span>
+                  </div>
+                )}
+                {(companySnap as any).website && (
+                  <a href={(companySnap as any).website} target="_blank" rel="noopener noreferrer"
+                    className="text-primary hover:underline">
+                    {(companySnap as any).website.replace(/^https?:\/\/(www\.)?/, '')}
+                  </a>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Price history chart — shown whenever a ticker is entered */}
+        {priceHistory?.data && priceHistory.data.length > 0 && (
+          <div className="card p-5">
+            <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
+              <h3 className="font-semibold text-ink text-sm">{ticker} Price Chart</h3>
+              <div className="flex gap-1">
+                {(['1mo','3mo','6mo','1y','2y'].map(p => (
+                  <button key={p} onClick={() => setChartPeriod(p)}
+                    className={clsx('px-2.5 py-1 text-xs font-medium rounded-lg transition-colors',
+                      chartPeriod === p ? 'bg-primary text-white' : 'text-ink-muted hover:text-ink bg-surface-muted')}>
+                    {p}
+                  </button>
+                )))}
+              </div>
+            </div>
+
+            {(() => {
+              const data = priceHistory.data
+              const first = data[0]?.close ?? 0
+              const last  = data[data.length - 1]?.close ?? 0
+              const isUp  = last >= first
+              const minC  = Math.min(...data.map(d => d.close ?? 0))
+              const maxC  = Math.max(...data.map(d => d.close ?? 0))
+              const pad   = (maxC - minC) * 0.05
+
+              return (
+                <>
+                  <div className="flex items-baseline gap-3 mb-3">
+                    <span className="text-2xl font-bold text-ink">${(last as number).toFixed(2)}</span>
+                    <span className={clsx('text-sm font-semibold', isUp ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400')}>
+                      {isUp ? '+' : ''}{(((last as number) - (first as number)) / (first as number) * 100).toFixed(2)}% ({chartPeriod})
+                    </span>
+                  </div>
+                  <ResponsiveContainer width="100%" height={220}>
+                    <LineChart data={data} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
+                      <XAxis dataKey="date"
+                        tickFormatter={(d: string) => d.slice(5)}
+                        tick={{ fontSize: 10, fill: 'var(--color-ink-faint)' }}
+                        tickLine={false} axisLine={false}
+                        interval={Math.floor(data.length / 6)} />
+                      <YAxis
+                        domain={[minC - pad, maxC + pad]}
+                        tick={{ fontSize: 10, fill: 'var(--color-ink-faint)' }}
+                        tickLine={false} axisLine={false}
+                        tickFormatter={(v: number) => `$${v.toFixed(0)}`}
+                        width={52} />
+                      <Tooltip
+                        contentStyle={{ background: 'var(--color-surface)', border: '1px solid var(--color-surface-border)', borderRadius: 8, fontSize: 12 }}
+                        labelStyle={{ color: 'var(--color-ink-muted)' }}
+                        formatter={(v) => [`$${Number(v).toFixed(2)}`, 'Close']} />
+                      <ReferenceLine y={first as number} stroke="var(--color-ink-faint)" strokeDasharray="4 4" strokeWidth={1} />
+                      <Line type="monotone" dataKey="close"
+                        stroke={isUp ? '#22c55e' : '#ef4444'}
+                        strokeWidth={1.5} dot={false} activeDot={{ r: 3 }} />
+                    </LineChart>
+                  </ResponsiveContainer>
+                </>
+              )
+            })()}
+          </div>
+        )}
+        {chartLoading && ticker && (
+          <div className="card p-4 text-center text-ink-muted text-sm">Loading chart…</div>
         )}
 
         {/* Results */}

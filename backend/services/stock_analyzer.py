@@ -878,7 +878,8 @@ def fetch_analyst_snapshot(ticker: str) -> dict:
         "sector":              info.get("sector"),
         "industry":            info.get("industryDisp") or info.get("industry"),
         "website":             info.get("website"),
-        "description":         (info.get("longBusinessSummary") or "")[:400] or None,
+        "description":         (info.get("longBusinessSummary") or "")[:600] or None,
+        "employees":           info.get("fullTimeEmployees"),
         # Price
         "current_price":       current_price,
         "high_52w":            _safe(info.get("fiftyTwoWeekHigh")),

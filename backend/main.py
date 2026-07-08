@@ -8,14 +8,14 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.config import settings
-from backend.routers import auth, research, admin, profile, analysis, market, prices, watchlist, portfolio, alerts, earnings, options
+from backend.routers import auth, research, admin, profile, analysis, market, prices, watchlist, portfolio, alerts, earnings, options, journal
 from database import init_db
 
 logger = logging.getLogger(__name__)
 
 
 async def _digest_scheduler():
-    """Background coroutine: checks every 5 minutes and fires digest at 6am ET on weekdays."""
+    """Background coroutine: checks every 5 minutes and fires digest at 9am ET on weekdays."""
     from datetime import date
     last_run_date: date | None = None
 
@@ -41,9 +41,9 @@ async def _digest_scheduler():
             from datetime import datetime
             now    = datetime.now(et)
             today  = now.date()
-            # Fire between 06:00–06:30 ET on weekdays, once per day
+            # Fire between 09:00–09:30 ET on weekdays, once per day
             if (now.weekday() < 5
-                    and now.hour == 6
+                    and now.hour == 9
                     and now.minute < 30
                     and last_run_date != today):
                 logger.info("Scheduler: running daily digest")
@@ -109,6 +109,7 @@ app.include_router(portfolio.router,  prefix="/api/v1")
 app.include_router(alerts.router,     prefix="/api/v1")
 app.include_router(earnings.router, prefix="/api/v1")
 app.include_router(options.router,  prefix="/api/v1")
+app.include_router(journal.router,   prefix="/api/v1")
 
 
 @app.get("/health")

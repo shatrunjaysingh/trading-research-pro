@@ -302,6 +302,28 @@ _SCHEMA_STATEMENTS = [
     """,
     "CREATE INDEX IF NOT EXISTS idx_price_alerts_user ON price_alerts(user_id)",
     "CREATE INDEX IF NOT EXISTS idx_price_alerts_active ON price_alerts(is_active) WHERE is_active = TRUE",
+    """
+    CREATE TABLE IF NOT EXISTS trade_journal (
+        id           SERIAL PRIMARY KEY,
+        user_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        ticker       TEXT NOT NULL,
+        direction    TEXT NOT NULL CHECK(direction IN ('long','short')),
+        entry_date   DATE NOT NULL,
+        exit_date    DATE,
+        entry_price  NUMERIC(16,4) NOT NULL,
+        exit_price   NUMERIC(16,4),
+        shares       NUMERIC(16,6) NOT NULL,
+        setup        TEXT DEFAULT '',
+        notes        TEXT DEFAULT '',
+        outcome      TEXT CHECK(outcome IN ('win','loss','breakeven','open')),
+        realized_pnl NUMERIC(16,4),
+        realized_pnl_pct NUMERIC(8,2),
+        created_at   TIMESTAMPTZ DEFAULT NOW(),
+        updated_at   TIMESTAMPTZ DEFAULT NOW()
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_journal_user_id ON trade_journal(user_id)",
+    "CREATE INDEX IF NOT EXISTS idx_journal_ticker  ON trade_journal(ticker)",
     # Immutable audit log — prevent any DELETE at the database level
     """
     CREATE OR REPLACE FUNCTION _prevent_audit_delete() RETURNS trigger AS $$
@@ -1549,3 +1571,137 @@ def verify_password(password: str, hashed: str) -> bool:
         return bcrypt.checkpw(password.encode("utf-8"), hashed.encode("utf-8"))
     except Exception:
         return False
+
+
+# ── Trade Journal ──────────────────────────────────────────────────────────────
+
+def get_trade_journal(user_id: int) -> list[dict]:
+    with get_db() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                """SELECT * FROM trade_journal WHERE user_id = %s
+                   ORDER BY entry_date DESC, created_at DESC""",
+                (user_id,)
+            )
+            return [dict(r) for r in cur.fetchall()]
+
+
+def create_trade(user_id: int, data: dict) -> dict:
+    with get_db() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            # Auto-compute realized P&L if exit_price provided
+            realized_pnl = None
+            realized_pnl_pct = None
+            if data.get("exit_price") and data.get("entry_price") and data.get("shares"):
+                ep  = float(data["entry_price"])
+                xp  = float(data["exit_price"])
+                sh  = float(data["shares"])
+                direction = data.get("direction", "long")
+                if direction == "long":
+                    realized_pnl = (xp - ep) * sh
+                else:
+                    realized_pnl = (ep - xp) * sh
+                realized_pnl_pct = round((xp - ep) / ep * 100 * (1 if direction == "long" else -1), 2)
+
+            outcome = data.get("outcome")
+            if outcome is None and data.get("exit_price"):
+                if realized_pnl and realized_pnl > 0:
+                    outcome = "win"
+                elif realized_pnl and realized_pnl < 0:
+                    outcome = "loss"
+                else:
+                    outcome = "breakeven"
+            elif outcome is None:
+                outcome = "open"
+
+            cur.execute(
+                """INSERT INTO trade_journal
+                   (user_id, ticker, direction, entry_date, exit_date, entry_price,
+                    exit_price, shares, setup, notes, outcome, realized_pnl, realized_pnl_pct)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                   RETURNING *""",
+                (
+                    user_id,
+                    data["ticker"].upper().strip(),
+                    data.get("direction", "long"),
+                    data["entry_date"],
+                    data.get("exit_date"),
+                    float(data["entry_price"]),
+                    float(data["exit_price"]) if data.get("exit_price") else None,
+                    float(data["shares"]),
+                    data.get("setup", ""),
+                    data.get("notes", ""),
+                    outcome,
+                    realized_pnl,
+                    realized_pnl_pct,
+                )
+            )
+            return dict(cur.fetchone())
+
+
+def update_trade(user_id: int, trade_id: int, data: dict) -> dict | None:
+    with get_db() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            # Recompute P&L
+            realized_pnl = None
+            realized_pnl_pct = None
+            if data.get("exit_price") and data.get("entry_price") and data.get("shares"):
+                ep  = float(data["entry_price"])
+                xp  = float(data["exit_price"])
+                sh  = float(data["shares"])
+                direction = data.get("direction", "long")
+                if direction == "long":
+                    realized_pnl = (xp - ep) * sh
+                else:
+                    realized_pnl = (ep - xp) * sh
+                realized_pnl_pct = round((xp - ep) / ep * 100 * (1 if direction == "long" else -1), 2)
+
+            outcome = data.get("outcome")
+            if outcome is None and data.get("exit_price"):
+                if realized_pnl and realized_pnl > 0:
+                    outcome = "win"
+                elif realized_pnl and realized_pnl < 0:
+                    outcome = "loss"
+                else:
+                    outcome = "breakeven"
+            elif outcome is None:
+                outcome = "open"
+
+            cur.execute(
+                """UPDATE trade_journal SET
+                   ticker=%(ticker)s, direction=%(direction)s, entry_date=%(entry_date)s,
+                   exit_date=%(exit_date)s, entry_price=%(entry_price)s, exit_price=%(exit_price)s,
+                   shares=%(shares)s, setup=%(setup)s, notes=%(notes)s,
+                   outcome=%(outcome)s, realized_pnl=%(realized_pnl)s,
+                   realized_pnl_pct=%(realized_pnl_pct)s, updated_at=NOW()
+                   WHERE id=%(id)s AND user_id=%(user_id)s
+                   RETURNING *""",
+                {
+                    "ticker": data["ticker"].upper().strip(),
+                    "direction": data.get("direction", "long"),
+                    "entry_date": data["entry_date"],
+                    "exit_date": data.get("exit_date"),
+                    "entry_price": float(data["entry_price"]),
+                    "exit_price": float(data["exit_price"]) if data.get("exit_price") else None,
+                    "shares": float(data["shares"]),
+                    "setup": data.get("setup", ""),
+                    "notes": data.get("notes", ""),
+                    "outcome": outcome,
+                    "realized_pnl": realized_pnl,
+                    "realized_pnl_pct": realized_pnl_pct,
+                    "id": trade_id,
+                    "user_id": user_id,
+                }
+            )
+            row = cur.fetchone()
+            return dict(row) if row else None
+
+
+def delete_trade(user_id: int, trade_id: int) -> bool:
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM trade_journal WHERE id = %s AND user_id = %s",
+                (trade_id, user_id)
+            )
+            return cur.rowcount > 0

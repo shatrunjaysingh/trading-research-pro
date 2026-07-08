@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { clsx } from 'clsx'
+import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts'
 import {
   apiAnalyzePortfolio,
   apiGetSavedPortfolio,
@@ -534,6 +535,45 @@ export function PortfolioPage() {
                 </div>
               ))}
             </div>
+
+            {/* Portfolio sparkline — compute from holdings data (current snapshot) */}
+            {(() => {
+              // Build a simple bar chart from the holdings showing value distribution
+              const holdingBars = result.holdings
+                .filter(h => h.current_value != null && !h.error)
+                .sort((a, b) => (b.current_value ?? 0) - (a.current_value ?? 0))
+                .map(h => ({
+                  ticker: h.ticker,
+                  value: h.current_value ?? 0,
+                  pnl_pct: h.pnl_pct ?? 0,
+                }))
+
+              if (holdingBars.length === 0) return null
+
+              return (
+                <div className="card p-5">
+                  <h3 className="text-sm font-semibold text-ink mb-4">Holdings by Value</h3>
+                  <ResponsiveContainer width="100%" height={160}>
+                    <AreaChart data={holdingBars} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
+                      <XAxis dataKey="ticker" tick={{ fontSize: 11, fill: 'var(--color-ink-muted)' }} tickLine={false} axisLine={false} />
+                      <YAxis tick={{ fontSize: 10, fill: 'var(--color-ink-faint)' }} tickLine={false} axisLine={false}
+                        tickFormatter={(v: number) => v >= 1000 ? `$${(v/1000).toFixed(0)}k` : `$${v.toFixed(0)}`} width={52} />
+                      <Tooltip
+                        contentStyle={{ background: 'var(--color-surface)', border: '1px solid var(--color-surface-border)', borderRadius: 8, fontSize: 12 }}
+                        formatter={(v, _name, props: any) => [
+                          `$${Number(v).toLocaleString('en-US', {maximumFractionDigits: 0})} (${props.payload.pnl_pct >= 0 ? '+' : ''}${props.payload.pnl_pct.toFixed(1)}%)`,
+                          'Value'
+                        ]} />
+                      <Area type="monotone" dataKey="value"
+                        stroke="var(--color-primary)"
+                        fill="var(--color-primary)"
+                        fillOpacity={0.15}
+                        strokeWidth={2} dot={{ r: 3, fill: 'var(--color-primary)' }} />
+                    </AreaChart>
+                  </ResponsiveContainer>
+                </div>
+              )
+            })()}
 
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
               <div className="bg-surface rounded-2xl border border-surface-border shadow-card p-5">

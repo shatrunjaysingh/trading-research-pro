@@ -1,7 +1,10 @@
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 
+import asyncio
+
 from fastapi import APIRouter, HTTPException, Depends, Request
+from fastapi import Query as QParam
 from fastapi.responses import StreamingResponse
 
 import auth as auth_module
@@ -72,3 +75,57 @@ def research_regime(current_user: dict = Depends(get_current_user)):
     """Return current market regime for display in the Research Dashboard. Cached 1h."""
     from backend.services.regime_detector import get_market_regime
     return get_market_regime()
+
+
+@router.get("/screen")
+async def screen_stocks(
+    min_st:  int = QParam(0,  ge=0, le=100),
+    min_lt:  int = QParam(0,  ge=0, le=100),
+    min_rs:  int = QParam(0,  ge=0, le=100),
+    min_price: float = QParam(5.0, ge=0),
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    Screen S&P 100 + watchlist tickers by ST, LT, RS thresholds.
+    Re-uses the same scoring logic as the daily digest.
+    Returns top 50 results sorted by composite score desc.
+    """
+    from backend.services.rs_rating import fetch_spy_returns
+    from backend.services.daily_digest import _score_ticker_for_digest, SP100
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    import database as db
+
+    # Universe: S&P 100 + user's watchlist
+    try:
+        wl = db.get_watchlist(current_user["id"])
+        extra = [w["ticker"] for w in wl if w["ticker"] not in SP100]
+    except Exception:
+        extra = []
+    universe = list(set(SP100 + extra))
+
+    loop = asyncio.get_event_loop()
+
+    def _run_screen():
+        spy_returns = fetch_spy_returns()
+        results = []
+        with ThreadPoolExecutor(max_workers=20) as ex:
+            futures = {ex.submit(_score_ticker_for_digest, t, spy_returns): t for t in universe}
+            for f in as_completed(futures):
+                r = f.result()
+                if r is None:
+                    continue
+                if r["st_score"] < min_st:
+                    continue
+                if r.get("lt_score") is not None and r["lt_score"] < min_lt:
+                    continue
+                if r["rs_score"] < min_rs:
+                    continue
+                if r["price"] < min_price:
+                    continue
+                r["composite"] = round(r["st_score"] * 0.4 + (r.get("lt_score") or 0) * 0.3 + r["rs_score"] * 0.3, 1)
+                results.append(r)
+        results.sort(key=lambda x: x["composite"], reverse=True)
+        return results[:50]
+
+    results = await loop.run_in_executor(None, _run_screen)
+    return {"results": results, "universe_size": len(universe)}

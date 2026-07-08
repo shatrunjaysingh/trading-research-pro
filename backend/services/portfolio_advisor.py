@@ -165,6 +165,7 @@ def _score_one_holding(holding: dict, spy_returns: dict) -> dict | None:
             "lt_score":      lt["score"]   if lt else None,
             "lt_signal":     lt["signal"]  if lt else None,
             "beta":          _safe(info.get("beta")) or 1.0,
+            "earnings_soon": False,
         }
     except Exception as exc:
         logger.debug("Portfolio advisor failed for %s: %s", ticker, exc)
@@ -223,6 +224,34 @@ def analyze_saved_portfolio(user_id: int) -> dict:
         h["action_color"]    = ACTION_COLORS[advice["action"]]
         h["action_confidence"] = advice["confidence"]
         h["action_reasons"]  = advice["reasons"]
+
+        # Check if earnings are within 7 days
+        ticker = h["ticker"]
+        try:
+            import yfinance as yf
+            cal = yf.Ticker(ticker).calendar
+            earn_date = None
+            if isinstance(cal, dict):
+                earn_date = cal.get("Earnings Date")
+                if isinstance(earn_date, list) and earn_date:
+                    earn_date = earn_date[0]
+            elif hasattr(cal, 'columns') and not cal.empty:
+                if "Earnings Date" in cal.columns:
+                    earn_date = cal["Earnings Date"].iloc[0]
+            if earn_date is not None:
+                import pandas as pd
+                from datetime import datetime, timezone
+                if hasattr(earn_date, 'to_pydatetime'):
+                    earn_date = earn_date.to_pydatetime()
+                if earn_date.tzinfo is None:
+                    earn_date = earn_date.replace(tzinfo=timezone.utc)
+                days_out = (earn_date - datetime.now(timezone.utc)).days
+                if 0 <= days_out <= 7:
+                    h["action_reasons"].append(f"⚠️ Earnings in {days_out} day{'s' if days_out != 1 else ''} — elevated event risk")
+                    h["earnings_soon"] = True
+                    h["earnings_days_out"] = days_out
+        except Exception:
+            pass
 
     # Sort: sells first (need attention), then add_more, then reduce, then hold
     action_order = {"sell": 0, "add_more": 1, "reduce": 2, "hold": 3}

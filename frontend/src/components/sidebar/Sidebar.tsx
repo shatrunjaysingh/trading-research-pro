@@ -15,6 +15,8 @@ const NAV = [
   { to: '/earnings',  label: 'Earnings',        icon: '📅' },
   { to: '/sectors',   label: 'Sector Heatmap',  icon: '🗺️' },
   { to: '/options',   label: 'Options Flow',    icon: '⚡' },
+  { to: '/screener',  label: 'Stock Screener',  icon: '🔎' },
+  { to: '/journal',   label: 'Trade Journal',   icon: '📓' },
   { to: '/admin',     label: 'Admin Panel',     icon: '⚙️', admin: true },
   { to: '/profile',   label: 'My Profile',      icon: '👤' },
 ]
