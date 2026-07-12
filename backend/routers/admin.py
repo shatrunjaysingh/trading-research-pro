@@ -327,40 +327,25 @@ def delete_digest_email(email_id: int, admin: dict = Depends(_require_admin)):
 @router.post("/test-email")
 def test_email(body: dict = Body(...), admin: dict = Depends(_require_admin)):
     """Send a plain test email and return success/error immediately."""
-    import smtplib, ssl
     from backend.config import settings
 
     to = (body.get("to") or "").strip()
     if not to or "@" not in to:
         raise HTTPException(status_code=400, detail="Provide a valid 'to' email address")
 
-    sender   = settings.email_sender.strip()
-    password = settings.email_app_password.strip()
+    sg_key = settings.sendgrid_api_key.strip()
+    sender = settings.email_sender.strip()
 
-    if not sender or not password:
-        return {
-            "ok": False,
-            "error": "EMAIL_SENDER or EMAIL_APP_PASSWORD env var is not set on this server",
-            "sender": sender or "(empty)",
-        }
+    if not sg_key and not (sender and settings.email_app_password.strip()):
+        return {"ok": False, "error": "No email provider configured. Set SENDGRID_API_KEY on Render."}
 
     try:
-        from email.mime.text import MIMEText
-        from email.mime.multipart import MIMEMultipart
-        msg = MIMEMultipart("alternative")
-        msg["Subject"] = "TradingResearch Pro — SMTP test"
-        msg["From"] = sender
-        msg["To"] = to
-        msg.attach(MIMEText("<h2>SMTP is working!</h2><p>Your daily digest emails will be delivered successfully.</p>", "html"))
-
-        ctx = ssl.create_default_context()
-        with smtplib.SMTP_SSL("smtp.gmail.com", 465, context=ctx, timeout=20) as s:
-            s.login(sender, password)
-            s.sendmail(sender, [to], msg.as_string())
-
-        return {"ok": True, "sent_to": to, "from": sender}
+        from backend.services.email_service import send_email
+        send_email(to, "TradingResearch Pro — Email test", "<h2>It works!</h2><p>Email delivery is configured correctly.</p>")
+        method = "SendGrid" if sg_key else "SMTP"
+        return {"ok": True, "sent_to": to, "from": sender or "via SendGrid", "method": method}
     except Exception as exc:
-        return {"ok": False, "error": f"{type(exc).__name__}: {exc}", "sender": sender}
+        return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
 
 
 def _run_digest_background() -> None:

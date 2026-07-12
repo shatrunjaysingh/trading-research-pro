@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     polygon_api_key: str = ""
     email_sender: str = ""
     email_app_password: str = ""
+    sendgrid_api_key: str = ""
 
     # Accept JSON array, comma-separated string, or "*" from environment.
     # Example: CORS_ORIGINS=https://yourapp.vercel.app,https://www.yourapp.com

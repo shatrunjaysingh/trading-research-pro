@@ -15,22 +15,55 @@ logger = logging.getLogger(__name__)
 
 
 def send_email(to_email: str, subject: str, html_body: str, text_body: str = "") -> bool:
-    """Send HTML email. Returns True on success."""
-    import ssl
+    """Send HTML email via SendGrid (preferred) or Gmail SMTP (fallback)."""
+    from backend.config import settings
+
+    sg_key = settings.sendgrid_api_key.strip()
+    if sg_key:
+        return _send_via_sendgrid(to_email, subject, html_body, sg_key, settings.email_sender.strip())
+
+    # SMTP fallback (works locally, blocked on Render free tier)
+    return _send_via_smtp(to_email, subject, html_body, text_body,
+                          settings.email_sender.strip(), settings.email_app_password.strip())
+
+
+def _send_via_sendgrid(to_email: str, subject: str, html_body: str, api_key: str, from_email: str) -> bool:
+    import requests
+    from_email = from_email or "noreply@tradingresearchpro.com"
     try:
-        from backend.config import settings
-        sender   = settings.email_sender.strip()
-        password = settings.email_app_password.strip()
+        resp = requests.post(
+            "https://api.sendgrid.com/v3/mail/send",
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            json={
+                "personalizations": [{"to": [{"email": to_email}]}],
+                "from": {"email": from_email, "name": "TradingResearch Pro"},
+                "subject": subject,
+                "content": [{"type": "text/html", "value": html_body}],
+            },
+            timeout=15,
+        )
+        if resp.status_code == 202:
+            logger.info("SendGrid: sent to %s", to_email)
+            return True
+        logger.error("SendGrid error %s: %s", resp.status_code, resp.text)
+        raise RuntimeError(f"SendGrid {resp.status_code}: {resp.text}")
+    except RuntimeError:
+        raise
+    except Exception as exc:
+        logger.error("SendGrid request failed: %s", exc)
+        raise
 
-        if not sender or not password:
-            logger.warning("Email not configured — set EMAIL_SENDER and EMAIL_APP_PASSWORD env vars")
-            return False
 
+def _send_via_smtp(to_email: str, subject: str, html_body: str, text_body: str,
+                   sender: str, password: str) -> bool:
+    import ssl
+    if not sender or not password:
+        raise RuntimeError("EMAIL_SENDER and EMAIL_APP_PASSWORD are not configured")
+    try:
         msg = MIMEMultipart("alternative")
         msg["Subject"] = subject
         msg["From"]    = sender
         msg["To"]      = to_email
-
         if text_body:
             msg.attach(MIMEText(text_body, "plain"))
         msg.attach(MIMEText(html_body, "html"))
@@ -39,12 +72,11 @@ def send_email(to_email: str, subject: str, html_body: str, text_body: str = "")
         with smtplib.SMTP_SSL("smtp.gmail.com", 465, context=ctx, timeout=30) as server:
             server.login(sender, password)
             server.sendmail(sender, [to_email], msg.as_string())
-
-        logger.info("Email sent to %s: %s", to_email, subject)
+        logger.info("SMTP: sent to %s", to_email)
         return True
     except Exception as exc:
-        logger.error("Email send failed to %s: %s — %s", to_email, type(exc).__name__, exc)
-        raise  # re-raise so digest can capture the real error
+        logger.error("SMTP send failed to %s: %s", to_email, exc)
+        raise
 
 
 def _signal_emoji(signal: str) -> str:
