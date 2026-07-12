@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { apiGetUsers, apiGetLicenses, apiGetAudit, apiCreateUser, apiUpdateUser, apiDeactivateUser, apiActivateUser, apiGetTokenUsage, apiGetBacktest, apiRunHistoricalBacktest, apiGetHistoricalBacktest, apiGetRegime, apiSendDigest, apiGetDigestEmails, apiAddDigestEmail, apiToggleDigestEmail, apiDeleteDigestEmail } from '../api/admin'
+import { apiGetUsers, apiGetLicenses, apiGetAudit, apiCreateUser, apiUpdateUser, apiDeactivateUser, apiActivateUser, apiGetTokenUsage, apiGetBacktest, apiRunHistoricalBacktest, apiGetHistoricalBacktest, apiGetRegime, apiSendDigest, apiGetDigestEmails, apiAddDigestEmail, apiToggleDigestEmail, apiDeleteDigestEmail, apiTestEmail } from '../api/admin'
 import { RoleBadge, TierBadge, StatusBadge } from '../components/ui/Badge'
 import { KpiCard } from '../components/ui/KpiCard'
 import { Spinner } from '../components/ui/Spinner'
@@ -15,6 +15,14 @@ function OverviewTab({ users, licenses }: { users: User[]; licenses: License[] }
   const byRole  = users.reduce<Record<string,number>>((a,u) => ({...a,[u.role]:(a[u.role]||0)+1}),{})
   const now24h  = new Date(Date.now()-24*3600*1000).toISOString()
   const recent  = users.filter(u => u.last_login && u.last_login > now24h).length
+
+  const [testEmailTo, setTestEmailTo] = useState('ssingh327@gmail.com')
+  const [testResult, setTestResult]   = useState<{ ok: boolean; msg: string } | null>(null)
+  const testEmailMut = useMutation({
+    mutationFn: () => apiTestEmail(testEmailTo),
+    onSuccess: (data) => setTestResult({ ok: data.ok, msg: data.ok ? `Sent to ${data.sent_to} from ${data.from}` : `Failed: ${data.error}` }),
+    onError: (e: unknown) => setTestResult({ ok: false, msg: `Request error: ${(e as { response?: { data?: { detail?: string } } })?.response?.data?.detail ?? 'Unknown'}` }),
+  })
 
   const [digestResult, setDigestResult] = useState<{ ok: boolean; msg: string; detail?: string } | null>(null)
   const digestMut = useMutation({
@@ -36,6 +44,24 @@ function OverviewTab({ users, licenses }: { users: User[]; licenses: License[] }
         <KpiCard value={recent}          label="Logins (24h)" />
         <KpiCard value={licenses.length} label="License Plans" />
       </div>
+      {/* Test Email */}
+      <div className="card p-5 border-l-4 border-amber-400">
+        <h3 className="font-bold text-ink mb-1">🧪 Test Email (SMTP check)</h3>
+        <p className="text-sm text-ink-muted mb-3">Send a plain test email to verify SMTP credentials are working on this server.</p>
+        <div className="flex gap-3 items-end flex-wrap">
+          <div className="flex-1 min-w-48">
+            <label className="label">Send test to</label>
+            <input type="email" className="input" value={testEmailTo} onChange={e => setTestEmailTo(e.target.value)} />
+          </div>
+          <button onClick={() => { setTestResult(null); testEmailMut.mutate() }} disabled={testEmailMut.isPending} className="btn-secondary disabled:opacity-50">
+            {testEmailMut.isPending ? 'Sending…' : 'Send Test Email'}
+          </button>
+        </div>
+        {testResult && (
+          <p className={`text-sm mt-2 font-semibold ${testResult.ok ? 'text-green-700' : 'text-red-600'}`}>{testResult.msg}</p>
+        )}
+      </div>
+
       {/* Send Digest */}
       <div className="card p-5 border-l-4 border-primary">
         <div className="flex items-center justify-between flex-wrap gap-3">
