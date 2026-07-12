@@ -172,8 +172,10 @@ def run_daily_digest(force: bool = False) -> dict:
 
         # Send to all subscribed users
         from backend.services.email_service import send_email, build_digest_html
+        from backend.config import settings
         date_str = today.strftime("%A, %B %-d, %Y")
         users_sent = 0
+        email_configured = bool(settings.email_sender and settings.email_app_password)
 
         try:
             subscribed = db.get_digest_subscribers()
@@ -230,6 +232,8 @@ def run_daily_digest(force: bool = False) -> dict:
             "st_picks": [p["ticker"] for p in top_st],
             "lt_picks": [p["ticker"] for p in top_lt],
             "users_sent": users_sent,
+            "recipients_found": len(all_recipients),
+            "email_configured": email_configured,
             "universe_size": len(universe),
             "scored": len(scored),
         }

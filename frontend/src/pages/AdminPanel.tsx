@@ -16,14 +16,21 @@ function OverviewTab({ users, licenses }: { users: User[]; licenses: License[] }
   const now24h  = new Date(Date.now()-24*3600*1000).toISOString()
   const recent  = users.filter(u => u.last_login && u.last_login > now24h).length
 
-  const [digestResult, setDigestResult] = useState<string | null>(null)
+  const [digestResult, setDigestResult] = useState<{ ok: boolean; msg: string; detail?: string } | null>(null)
   const digestMut = useMutation({
     mutationFn: apiSendDigest,
     onSuccess: (data) => {
-      if (data.skipped) setDigestResult(`Skipped: ${data.reason}`)
-      else setDigestResult(`Sent to ${data.users_sent ?? 0} user(s). Picks: ${data.picks_count ?? 0}`)
+      if (data.skipped) {
+        setDigestResult({ ok: false, msg: `Skipped: ${data.reason}` })
+      } else if (!data.email_configured) {
+        setDigestResult({ ok: false, msg: 'Email not configured on server', detail: 'EMAIL_SENDER and EMAIL_APP_PASSWORD env vars are missing on Render.' })
+      } else if (data.recipients_found === 0) {
+        setDigestResult({ ok: false, msg: 'No recipients found', detail: 'Add your email in the Digest Emails tab, or enable Daily Digest in your Profile.' })
+      } else {
+        setDigestResult({ ok: true, msg: `Sent to ${data.users_sent}/${data.recipients_found} recipient(s) · ST: ${(data.st_picks ?? []).join(', ')} · LT: ${(data.lt_picks ?? []).join(', ')}` })
+      }
     },
-    onError: (e: unknown) => setDigestResult(`Error: ${(e as { response?: { data?: { detail?: string } } })?.response?.data?.detail ?? 'Unknown error'}`),
+    onError: (e: unknown) => setDigestResult({ ok: false, msg: `Error: ${(e as { response?: { data?: { detail?: string } } })?.response?.data?.detail ?? 'Unknown error'}` }),
   })
 
   return (
@@ -43,9 +50,10 @@ function OverviewTab({ users, licenses }: { users: User[]; licenses: License[] }
           </div>
           <div className="flex items-center gap-3">
             {digestResult && (
-              <span className={`text-sm font-semibold px-3 py-1.5 rounded-lg ${digestResult.startsWith('Error') ? 'bg-red-50 text-red-600' : 'bg-green-50 text-green-700'}`}>
-                {digestResult}
-              </span>
+              <div className={`text-sm px-3 py-2 rounded-lg max-w-sm ${digestResult.ok ? 'bg-green-50 text-green-800' : 'bg-red-50 text-red-700'}`}>
+                <p className="font-semibold">{digestResult.msg}</p>
+                {digestResult.detail && <p className="text-xs mt-0.5 opacity-80">{digestResult.detail}</p>}
+              </div>
             )}
             <button
               onClick={() => { setDigestResult(null); digestMut.mutate() }}
