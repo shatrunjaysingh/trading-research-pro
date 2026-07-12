@@ -82,10 +82,13 @@ def check_price_alerts() -> dict:
         if not alerts:
             return {"checked": 0, "triggered": 0}
 
+        import re
         from collections import defaultdict
         by_ticker: dict[str, list] = defaultdict(list)
         for a in alerts:
-            by_ticker[a['ticker']].append(a)
+            t = (a.get('ticker') or '').strip()
+            if re.match(r'^[A-Z]{1,5}$', t):
+                by_ticker[t].append(a)
 
         all_triggered = []
         with ThreadPoolExecutor(max_workers=8) as ex:

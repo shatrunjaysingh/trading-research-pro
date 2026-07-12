@@ -102,10 +102,14 @@ def run_daily_digest(force: bool = False) -> dict:
         spy_returns = fetch_spy_returns()
 
         # Build universe: S&P 100 + all watchlist tickers
+        def _valid_ticker(t: str) -> bool:
+            import re
+            return bool(t and re.match(r'^[A-Z]{1,5}$', t.strip()))
+
         watchlist_tickers: list[str] = []
         try:
             all_wl = db.get_all_watchlist_tickers()
-            watchlist_tickers = list(set(all_wl) - set(SP100))
+            watchlist_tickers = [t for t in set(all_wl) - set(SP100) if _valid_ticker(t)]
         except Exception:
             pass
 
@@ -175,6 +179,7 @@ def run_daily_digest(force: bool = False) -> dict:
         from backend.config import settings
         date_str = today.strftime("%A, %B %-d, %Y")
         users_sent = 0
+        send_errors: list[str] = []
         email_configured = bool(settings.email_sender and settings.email_app_password)
 
         try:
@@ -211,15 +216,16 @@ def run_daily_digest(force: bool = False) -> dict:
                     date_str=date_str,
                     portfolio_holdings=user_portfolio,
                 )
-                ok = send_email(
+                send_email(
                     to_email=recipient["email"],
                     subject=f"📈 TradingResearch Daily — Top picks for {today.strftime('%b %-d')}",
                     html_body=html,
                 )
-                if ok:
-                    users_sent += 1
+                users_sent += 1
             except Exception as exc:
-                logger.error("Failed to send digest to %s: %s", recipient.get("email"), exc)
+                err_msg = f"{recipient.get('email')}: {type(exc).__name__}: {exc}"
+                logger.error("Failed to send digest — %s", err_msg)
+                send_errors.append(err_msg)
 
         # Log to DB
         try:
@@ -234,6 +240,7 @@ def run_daily_digest(force: bool = False) -> dict:
             "users_sent": users_sent,
             "recipients_found": len(all_recipients),
             "email_configured": email_configured,
+            "send_errors": send_errors,
             "universe_size": len(universe),
             "scored": len(scored),
         }

@@ -26,8 +26,12 @@ function OverviewTab({ users, licenses }: { users: User[]; licenses: License[] }
         setDigestResult({ ok: false, msg: 'Email not configured on server', detail: 'EMAIL_SENDER and EMAIL_APP_PASSWORD env vars are missing on Render.' })
       } else if (data.recipients_found === 0) {
         setDigestResult({ ok: false, msg: 'No recipients found', detail: 'Add your email in the Digest Emails tab, or enable Daily Digest in your Profile.' })
+      } else if (data.users_sent === 0 && data.recipients_found > 0) {
+        const errs = (data.send_errors ?? []).join(' | ')
+        setDigestResult({ ok: false, msg: `Sent 0/${data.recipients_found} — SMTP failed`, detail: errs || 'Check Render logs for error details.' })
       } else {
-        setDigestResult({ ok: true, msg: `Sent to ${data.users_sent}/${data.recipients_found} recipient(s) · ST: ${(data.st_picks ?? []).join(', ')} · LT: ${(data.lt_picks ?? []).join(', ')}` })
+        const errs = (data.send_errors ?? []).length > 0 ? ` (${data.send_errors.length} failed)` : ''
+        setDigestResult({ ok: true, msg: `Sent to ${data.users_sent}/${data.recipients_found} recipient(s)${errs} · ST: ${(data.st_picks ?? []).join(', ')} · LT: ${(data.lt_picks ?? []).join(', ')}` })
       }
     },
     onError: (e: unknown) => setDigestResult({ ok: false, msg: `Error: ${(e as { response?: { data?: { detail?: string } } })?.response?.data?.detail ?? 'Unknown error'}` }),

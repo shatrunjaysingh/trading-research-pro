@@ -16,10 +16,11 @@ logger = logging.getLogger(__name__)
 
 def send_email(to_email: str, subject: str, html_body: str, text_body: str = "") -> bool:
     """Send HTML email. Returns True on success."""
+    import ssl
     try:
         from backend.config import settings
-        sender   = settings.email_sender
-        password = settings.email_app_password
+        sender   = settings.email_sender.strip()
+        password = settings.email_app_password.strip()
 
         if not sender or not password:
             logger.warning("Email not configured — set EMAIL_SENDER and EMAIL_APP_PASSWORD env vars")
@@ -34,15 +35,16 @@ def send_email(to_email: str, subject: str, html_body: str, text_body: str = "")
             msg.attach(MIMEText(text_body, "plain"))
         msg.attach(MIMEText(html_body, "html"))
 
-        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+        ctx = ssl.create_default_context()
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465, context=ctx, timeout=30) as server:
             server.login(sender, password)
-            server.sendmail(sender, to_email, msg.as_string())
+            server.sendmail(sender, [to_email], msg.as_string())
 
         logger.info("Email sent to %s: %s", to_email, subject)
         return True
     except Exception as exc:
-        logger.error("Email send failed to %s: %s", to_email, exc)
-        return False
+        logger.error("Email send failed to %s: %s — %s", to_email, type(exc).__name__, exc)
+        raise  # re-raise so digest can capture the real error
 
 
 def _signal_emoji(signal: str) -> str:
