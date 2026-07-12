@@ -31,8 +31,8 @@ async def analyze_stock(
     if body.mode not in VALID_MODES:
         raise HTTPException(status_code=400, detail=f"mode must be one of {VALID_MODES}")
 
-    if body.mode == "api" and not auth_module.can_use_mode(current_user, "api"):
-        raise HTTPException(status_code=403, detail="API mode not available on your license.")
+    if body.mode == "api" and current_user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="AI Deep Dive is restricted to admin users.")
 
     if body.time_period not in VALID_PERIODS:
         raise HTTPException(status_code=400, detail=f"time_period must be one of {VALID_PERIODS}")
@@ -314,8 +314,11 @@ async def get_verdict(
     import anthropic
     from backend.config import settings
 
+    if current_user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Final Verdict is restricted to admin users.")
+
     if not settings.anthropic_api_key:
-        raise HTTPException(status_code=503, detail="AI verdict requires API mode (ANTHROPIC_API_KEY not configured)")
+        raise HTTPException(status_code=503, detail="AI verdict requires ANTHROPIC_API_KEY to be configured")
 
     ticker = (body.get("ticker") or "").upper().strip()
     if not ticker:

@@ -1487,7 +1487,8 @@ function WatchlistButton({ ticker }: { ticker: string }) {
 
 export function StockAnalysisPage() {
   const { user } = useAuthStore()
-  const canUseApi = user?.allowed_modes?.includes('api') ?? false
+  const isAdmin   = user?.role === 'admin'
+  const canUseApi = isAdmin  // AI Deep Dive and Final Verdict are admin-only
 
   // Pre-fill ticker from URL query param (e.g. /stocks?ticker=AAPL from watchlist)
   const urlParams = new URLSearchParams(typeof window !== 'undefined' ? window.location.search : '')
@@ -1777,12 +1778,15 @@ export function StockAnalysisPage() {
                       m === 'api' && !canUseApi && 'opacity-40 cursor-not-allowed',
                     )}
                   >
-                    {m === 'free' ? 'Free (yfinance)' : 'AI Deep Dive'}
+                    {m === 'free' ? 'Free (yfinance)' : '✨ AI Deep Dive'}
                   </button>
                 ))}
               </div>
-              {mode === 'api' && (
-                <p className="text-xs text-blue-600 mt-1.5">Claude will generate a narrative analysis</p>
+              {!canUseApi && (
+                <p className="text-xs text-ink-faint mt-1.5">AI Deep Dive and Final Verdict are available to admin users only</p>
+              )}
+              {mode === 'api' && canUseApi && (
+                <p className="text-xs text-blue-600 mt-1.5">Claude will generate a narrative analysis + Final Verdict with price targets</p>
               )}
             </div>
 
@@ -2172,8 +2176,8 @@ export function StockAnalysisPage() {
             {/* Short-term + Long-term horizon analysis */}
             <HorizonPanel st={result.st_analysis} lt={result.lt_analysis} />
 
-            {/* Final Verdict — synthesised judgement with price targets */}
-            {(result.st_analysis || result.lt_analysis) && (
+            {/* Final Verdict — admin-only AI judgement with price targets */}
+            {isAdmin && (result.st_analysis || result.lt_analysis) && (
               <FinalVerdictCard result={result} currency={currency} />
             )}
 
