@@ -1,7 +1,7 @@
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 
-from fastapi import APIRouter, HTTPException, Depends, status, Body
+from fastapi import APIRouter, HTTPException, Depends, status, Body, BackgroundTasks
 
 import auth as auth_module
 import database as db
@@ -324,14 +324,19 @@ def delete_digest_email(email_id: int, admin: dict = Depends(_require_admin)):
     return {"ok": True}
 
 
-@router.post("/send-digest")
-def send_digest_now(admin: dict = Depends(_require_admin)):
-    """Trigger the daily email digest immediately (admin only)."""
+def _run_digest_background() -> None:
+    import logging
+    log = logging.getLogger(__name__)
     try:
         from backend.services.daily_digest import run_daily_digest
         result = run_daily_digest(force=True)
-        return result
+        log.info("Background digest complete: %s", result)
     except Exception as exc:
-        import logging
-        logging.getLogger(__name__).error("Manual digest failed: %s", exc)
-        raise HTTPException(status_code=500, detail=str(exc))
+        log.error("Background digest failed: %s", exc)
+
+
+@router.post("/send-digest")
+def send_digest_now(background_tasks: BackgroundTasks, admin: dict = Depends(_require_admin)):
+    """Kick off the daily digest in the background and return immediately."""
+    background_tasks.add_task(_run_digest_background)
+    return {"status": "started", "message": "Digest is running — check your inbox in 2–3 minutes."}

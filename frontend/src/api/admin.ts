@@ -39,7 +39,7 @@ export const apiGetHistoricalBacktest = () =>
 
 // Send digest
 export const apiSendDigest = () =>
-  client.post('/admin/send-digest', null, { timeout: 120_000 }).then(r => r.data)
+  client.post('/admin/send-digest').then(r => r.data)
 
 // Digest email list
 export const apiGetDigestEmails = () =>

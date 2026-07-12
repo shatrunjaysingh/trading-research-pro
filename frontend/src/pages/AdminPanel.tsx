@@ -19,22 +19,13 @@ function OverviewTab({ users, licenses }: { users: User[]; licenses: License[] }
   const [digestResult, setDigestResult] = useState<{ ok: boolean; msg: string; detail?: string } | null>(null)
   const digestMut = useMutation({
     mutationFn: apiSendDigest,
-    onSuccess: (data) => {
-      if (data.skipped) {
-        setDigestResult({ ok: false, msg: `Skipped: ${data.reason}` })
-      } else if (!data.email_configured) {
-        setDigestResult({ ok: false, msg: 'Email not configured on server', detail: 'EMAIL_SENDER and EMAIL_APP_PASSWORD env vars are missing on Render.' })
-      } else if (data.recipients_found === 0) {
-        setDigestResult({ ok: false, msg: 'No recipients found', detail: 'Add your email in the Digest Emails tab, or enable Daily Digest in your Profile.' })
-      } else if (data.users_sent === 0 && data.recipients_found > 0) {
-        const errs = (data.send_errors ?? []).join(' | ')
-        setDigestResult({ ok: false, msg: `Sent 0/${data.recipients_found} — SMTP failed`, detail: errs || 'Check Render logs for error details.' })
-      } else {
-        const errs = (data.send_errors ?? []).length > 0 ? ` (${data.send_errors.length} failed)` : ''
-        setDigestResult({ ok: true, msg: `Sent to ${data.users_sent}/${data.recipients_found} recipient(s)${errs} · ST: ${(data.st_picks ?? []).join(', ')} · LT: ${(data.lt_picks ?? []).join(', ')}` })
-      }
+    onSuccess: () => {
+      setDigestResult({ ok: true, msg: 'Digest is running in the background', detail: 'Check your inbox in 2–3 minutes. Make sure your email is in the Digest Emails tab.' })
     },
-    onError: (e: unknown) => setDigestResult({ ok: false, msg: `Error: ${(e as { response?: { data?: { detail?: string } } })?.response?.data?.detail ?? 'Unknown error'}` }),
+    onError: (e: unknown) => {
+      const detail = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail
+      setDigestResult({ ok: false, msg: 'Request failed', detail: detail ?? 'Server may be restarting — wait 30 seconds and try again.' })
+    },
   })
 
   return (
