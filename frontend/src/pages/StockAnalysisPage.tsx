@@ -1368,7 +1368,7 @@ function FinalVerdictCard({ result, currency = '$' }: { result: StockAnalysisRes
             <div className={`p-5 ${stCfg?.bg ?? ''}`}>
               <div className="text-xs font-bold uppercase tracking-widest text-ink-faint mb-2">Short-Term · 1–4 Weeks</div>
               {stCfg && <div className={`text-2xl font-black mb-3 ${stCfg.color}`}>{stCfg.icon} {stCfg.label}</div>}
-              {verdict.st_reasoning && (
+              {!!verdict.st_reasoning && (
                 <p className="text-xs text-ink-muted leading-relaxed mb-3">{verdict.st_reasoning as string}</p>
               )}
               <div className="grid grid-cols-2 gap-2 text-xs">
@@ -1389,7 +1389,7 @@ function FinalVerdictCard({ result, currency = '$' }: { result: StockAnalysisRes
             <div className={`p-5 ${ltCfg?.bg ?? ''}`}>
               <div className="text-xs font-bold uppercase tracking-widest text-ink-faint mb-2">Long-Term · 3–12 Months</div>
               {ltCfg && <div className={`text-2xl font-black mb-3 ${ltCfg.color}`}>{ltCfg.icon} {ltCfg.label}</div>}
-              {verdict.lt_reasoning && (
+              {!!verdict.lt_reasoning && (
                 <p className="text-xs text-ink-muted leading-relaxed mb-3">{verdict.lt_reasoning as string}</p>
               )}
               <div className="grid grid-cols-2 gap-2 text-xs">
