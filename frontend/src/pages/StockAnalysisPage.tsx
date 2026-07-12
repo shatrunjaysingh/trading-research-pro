@@ -1275,6 +1275,186 @@ function PatternsPanel({ patterns }: { patterns: TechnicalPattern[] }) {
   )
 }
 
+// ── Final Verdict Card ────────────────────────────────────────────────────────
+
+const VERDICT_CONFIG: Record<string, { label: string; color: string; bg: string; border: string; icon: string }> = {
+  'strong buy': { label: 'STRONG BUY',  color: 'text-emerald-700 dark:text-emerald-400', bg: 'bg-emerald-50 dark:bg-emerald-900/20',  border: 'border-emerald-400', icon: '🟢' },
+  'buy':        { label: 'BUY',         color: 'text-green-700  dark:text-green-400',    bg: 'bg-green-50  dark:bg-green-900/20',    border: 'border-green-400',   icon: '🟢' },
+  'watch':      { label: 'WATCH',       color: 'text-blue-700   dark:text-blue-400',     bg: 'bg-blue-50   dark:bg-blue-900/20',     border: 'border-blue-400',    icon: '🔵' },
+  'hold':       { label: 'HOLD',        color: 'text-amber-700  dark:text-amber-400',    bg: 'bg-amber-50  dark:bg-amber-900/20',    border: 'border-amber-400',   icon: '🟡' },
+  'sell':       { label: 'SELL',        color: 'text-red-700    dark:text-red-400',      bg: 'bg-red-50    dark:bg-red-900/20',      border: 'border-red-400',     icon: '🔴' },
+}
+
+function FinalVerdictCard({ result, currency = '$' }: { result: StockAnalysisResult; currency?: string }) {
+  const st  = result.st_analysis
+  const lt  = result.lt_analysis
+  const tech = result.technical
+  const fund = result.fundamentals
+  const rs   = result.rs_rating?.rs_score ?? 50
+
+  if (!st && !lt) return null
+
+  const price   = tech?.current_price ?? 0
+  const sma50   = tech?.sma50  ?? price
+  const sma200  = tech?.sma200 ?? price
+  const bbUpper = (tech as Record<string, number> | undefined)?.bb_upper ?? price * 1.05
+  const high52w = (tech as Record<string, number> | undefined)?.high_52w ?? price * 1.10
+
+  const stScore = st?.score ?? 50
+  const ltScore = lt?.score ?? 50
+  const stSig   = st?.signal ?? 'hold'
+  const ltSig   = lt?.signal ?? 'hold'
+
+  // Price targets — algorithmic from technical levels
+  const fmt = (v: number) => `${currency}${v.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+
+  // ST: 4-week horizon
+  const stBull  = price > 0 ? Math.min(bbUpper * 1.01, price * (1 + (Math.max(stScore - 50, 0) / 100) * 0.18)) : 0
+  const stStop  = price > 0 ? Math.max(sma50 * 0.97, price * 0.92) : 0   // 7-8% IBD stop or below 50d MA
+  const stRisk  = price > 0 ? ((price - stStop) / price * 100) : 0
+  const stRew   = price > 0 ? ((stBull - price) / price * 100) : 0
+
+  // LT: 12-month horizon
+  const ltUpside = (ltScore - 50) / 100 * 0.45   // max ~22.5% upside at score=100
+  const ltBull  = price > 0 ? Math.min(Math.max(high52w * 1.05, price * (1 + ltUpside)), price * 1.60) : 0
+  const ltStop  = price > 0 ? Math.max(sma200 * 0.95, price * 0.80) : 0
+
+  // Overall verdict — combines both horizons
+  const sigRank: Record<string, number> = { 'strong buy': 5, buy: 4, watch: 3, hold: 2, sell: 1 }
+  const avgRank = ((sigRank[stSig] ?? 3) + (sigRank[ltSig] ?? 3)) / 2
+  const overall = avgRank >= 4.5 ? 'STRONG BUY' : avgRank >= 3.8 ? 'BUY' : avgRank >= 3.0 ? 'WATCH / ACCUMULATE' : avgRank >= 2.0 ? 'NEUTRAL — HOLD' : 'AVOID / SELL'
+  const overallColor = avgRank >= 4.5 ? 'text-emerald-600' : avgRank >= 3.8 ? 'text-green-600' : avgRank >= 3.0 ? 'text-blue-600' : avgRank >= 2.0 ? 'text-amber-600' : 'text-red-600'
+
+  // Key factors — top 3 bull from ST + top 2 bear
+  const allReasons = [...(st?.reasoning ?? []), ...(lt?.reasoning ?? [])]
+  const bullReasons = allReasons.filter(r => !r.toLowerCase().match(/below|bearish|overb|risk|short|declining|negative|lagging|death|distribution/)).slice(0, 4)
+  const bearReasons = allReasons.filter(r =>  r.toLowerCase().match(/below|bearish|overb|risk|short|declining|negative|lagging|death|distribution/)).slice(0, 3)
+
+  // Risk level
+  const riskLevel = stScore < 40 || ltScore < 40 ? 'HIGH'
+    : stScore < 55 || ltScore < 55 ? 'MEDIUM'
+    : rs < 50 ? 'MEDIUM'
+    : 'LOW-MEDIUM'
+  const riskColor = riskLevel === 'HIGH' ? 'text-red-600' : riskLevel === 'MEDIUM' ? 'text-amber-600' : 'text-green-600'
+
+  const stCfg = VERDICT_CONFIG[stSig] ?? VERDICT_CONFIG['hold']
+  const ltCfg = VERDICT_CONFIG[ltSig] ?? VERDICT_CONFIG['hold']
+
+  return (
+    <div className="card overflow-hidden border-2 border-primary/30">
+      {/* Header */}
+      <div className="bg-gradient-to-r from-slate-800 to-slate-700 px-5 py-4">
+        <div className="flex items-center justify-between flex-wrap gap-2">
+          <div>
+            <div className="text-white font-extrabold text-lg tracking-tight">🎯 Final Verdict — {result.ticker}</div>
+            <div className="text-slate-300 text-xs mt-0.5">Synthesised from technical, fundamental, momentum & sentiment signals</div>
+          </div>
+          <div className={`text-xl font-black tracking-wide ${overallColor} bg-white/10 px-4 py-1.5 rounded-xl`}>
+            {overall}
+          </div>
+        </div>
+      </div>
+
+      {/* ST + LT side-by-side */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 divide-y sm:divide-y-0 sm:divide-x divide-surface-border">
+        {/* Short-term */}
+        <div className={`p-5 ${stCfg.bg}`}>
+          <div className="flex items-center justify-between mb-3">
+            <div>
+              <div className="text-xs font-bold uppercase tracking-widest text-ink-faint mb-1">Short-Term · 1–4 Weeks</div>
+              <div className={`text-2xl font-black ${stCfg.color}`}>{stCfg.icon} {stCfg.label}</div>
+            </div>
+            <div className="text-right">
+              <div className="text-3xl font-black text-ink">{stScore.toFixed(0)}</div>
+              <div className="text-xs text-ink-faint">/ 100</div>
+            </div>
+          </div>
+          {price > 0 && (
+            <div className="grid grid-cols-2 gap-2 mt-3 text-xs">
+              <div className={`rounded-lg p-2.5 ${stSig === 'sell' ? 'bg-red-100 dark:bg-red-900/30' : 'bg-white/60 dark:bg-white/10'}`}>
+                <div className="text-ink-faint font-medium mb-0.5">{stSig === 'sell' ? 'Downside target' : '4-week target'}</div>
+                <div className={`font-black text-base ${stSig === 'sell' ? 'text-red-600' : 'text-green-600'}`}>{fmt(stBull)}</div>
+                <div className={`text-xs font-semibold ${stRew >= 0 ? 'text-green-600' : 'text-red-600'}`}>{stRew >= 0 ? '+' : ''}{stRew.toFixed(1)}%</div>
+              </div>
+              <div className="bg-red-50 dark:bg-red-900/20 rounded-lg p-2.5">
+                <div className="text-ink-faint font-medium mb-0.5">Stop loss</div>
+                <div className="font-black text-base text-red-600">{fmt(stStop)}</div>
+                <div className="text-xs text-red-500 font-semibold">−{stRisk.toFixed(1)}%</div>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Long-term */}
+        <div className={`p-5 ${ltCfg.bg}`}>
+          <div className="flex items-center justify-between mb-3">
+            <div>
+              <div className="text-xs font-bold uppercase tracking-widest text-ink-faint mb-1">Long-Term · 3–12 Months</div>
+              {lt ? (
+                <div className={`text-2xl font-black ${ltCfg.color}`}>{ltCfg.icon} {ltCfg.label}</div>
+              ) : (
+                <div className="text-sm text-ink-muted italic">Run with Fundamentals enabled for LT score</div>
+              )}
+            </div>
+            {lt && (
+              <div className="text-right">
+                <div className="text-3xl font-black text-ink">{ltScore.toFixed(0)}</div>
+                <div className="text-xs text-ink-faint">/ 100</div>
+              </div>
+            )}
+          </div>
+          {lt && price > 0 && (
+            <div className="grid grid-cols-2 gap-2 mt-3 text-xs">
+              <div className={`rounded-lg p-2.5 ${ltSig === 'sell' ? 'bg-red-100 dark:bg-red-900/30' : 'bg-white/60 dark:bg-white/10'}`}>
+                <div className="text-ink-faint font-medium mb-0.5">12-month target</div>
+                <div className={`font-black text-base ${ltSig === 'sell' ? 'text-red-600' : 'text-green-600'}`}>{fmt(ltBull)}</div>
+                <div className={`text-xs font-semibold ${ltBull >= price ? 'text-green-600' : 'text-red-600'}`}>
+                  {ltBull >= price ? '+' : ''}{((ltBull - price) / price * 100).toFixed(1)}%
+                </div>
+              </div>
+              <div className="bg-red-50 dark:bg-red-900/20 rounded-lg p-2.5">
+                <div className="text-ink-faint font-medium mb-0.5">Key support</div>
+                <div className="font-black text-base text-red-600">{fmt(ltStop)}</div>
+                <div className="text-xs text-red-500 font-semibold">−{((price - ltStop) / price * 100).toFixed(1)}%</div>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Key factors */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 divide-y sm:divide-y-0 sm:divide-x divide-surface-border border-t border-surface-border">
+        {bullReasons.length > 0 && (
+          <div className="p-4">
+            <div className="text-xs font-bold uppercase tracking-wide text-green-600 mb-2">✅ Bull Case</div>
+            <ul className="space-y-1">
+              {bullReasons.map((r, i) => (
+                <li key={i} className="text-xs text-ink-muted flex gap-1.5"><span className="text-green-500 flex-shrink-0">•</span>{r}</li>
+              ))}
+            </ul>
+          </div>
+        )}
+        {bearReasons.length > 0 && (
+          <div className="p-4">
+            <div className="text-xs font-bold uppercase tracking-wide text-red-500 mb-2">⚠️ Risk Factors</div>
+            <ul className="space-y-1">
+              {bearReasons.map((r, i) => (
+                <li key={i} className="text-xs text-ink-muted flex gap-1.5"><span className="text-red-400 flex-shrink-0">•</span>{r}</li>
+              ))}
+            </ul>
+          </div>
+        )}
+      </div>
+
+      {/* Footer */}
+      <div className="border-t border-surface-border px-5 py-3 bg-surface-muted flex items-center justify-between flex-wrap gap-2 text-xs text-ink-faint">
+        <span>RS Rating <strong className="text-ink">{rs}</strong>/100 · Risk level <strong className={riskColor}>{riskLevel}</strong> · Based on {allReasons.length} weighted signals</span>
+        <span className="italic">Not financial advice — always do your own research</span>
+      </div>
+    </div>
+  )
+}
+
 // ── Watchlist Button ──────────────────────────────────────────────────────────
 
 function WatchlistButton({ ticker }: { ticker: string }) {
@@ -2004,6 +2184,11 @@ export function StockAnalysisPage() {
 
             {/* Short-term + Long-term horizon analysis */}
             <HorizonPanel st={result.st_analysis} lt={result.lt_analysis} />
+
+            {/* Final Verdict — synthesised judgement with price targets */}
+            {(result.st_analysis || result.lt_analysis) && (
+              <FinalVerdictCard result={result} currency={currency} />
+            )}
 
             {/* Price history chart */}
             <StockChartPanel
