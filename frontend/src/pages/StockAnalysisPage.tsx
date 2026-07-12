@@ -8,7 +8,7 @@ import {
 import { useAuthStore } from '../store/auth'
 import { useMarketStore, useActiveExchanges } from '../store/market'
 import { COUNTRIES, formatTicker } from '../types/markets'
-import { streamStockAnalysis, fetchStockHistory, streamStockChat, ChatMsg, apiGetPriceHistory, fetchStockSnapshot } from '../api/analysis'
+import { streamStockAnalysis, fetchStockHistory, streamStockChat, ChatMsg, apiGetPriceHistory, fetchStockSnapshot, apiGetVerdict } from '../api/analysis'
 import { apiAddToWatchlist, apiRemoveFromWatchlist, apiCheckWatchlist } from '../api/watchlist'
 import {
   StockAnalysisResult, TechnicalSnapshot, FundamentalSnapshot,
@@ -1277,180 +1277,167 @@ function PatternsPanel({ patterns }: { patterns: TechnicalPattern[] }) {
 
 // ── Final Verdict Card ────────────────────────────────────────────────────────
 
-const VERDICT_CONFIG: Record<string, { label: string; color: string; bg: string; border: string; icon: string }> = {
-  'strong buy': { label: 'STRONG BUY',  color: 'text-emerald-700 dark:text-emerald-400', bg: 'bg-emerald-50 dark:bg-emerald-900/20',  border: 'border-emerald-400', icon: '🟢' },
-  'buy':        { label: 'BUY',         color: 'text-green-700  dark:text-green-400',    bg: 'bg-green-50  dark:bg-green-900/20',    border: 'border-green-400',   icon: '🟢' },
-  'watch':      { label: 'WATCH',       color: 'text-blue-700   dark:text-blue-400',     bg: 'bg-blue-50   dark:bg-blue-900/20',     border: 'border-blue-400',    icon: '🔵' },
-  'hold':       { label: 'HOLD',        color: 'text-amber-700  dark:text-amber-400',    bg: 'bg-amber-50  dark:bg-amber-900/20',    border: 'border-amber-400',   icon: '🟡' },
-  'sell':       { label: 'SELL',        color: 'text-red-700    dark:text-red-400',      bg: 'bg-red-50    dark:bg-red-900/20',      border: 'border-red-400',     icon: '🔴' },
+const VC: Record<string, { label: string; color: string; bg: string; icon: string }> = {
+  'STRONG BUY': { label: 'STRONG BUY', color: 'text-emerald-700 dark:text-emerald-300', bg: 'bg-emerald-50 dark:bg-emerald-900/25', icon: '🟢' },
+  'BUY':        { label: 'BUY',        color: 'text-green-700  dark:text-green-300',    bg: 'bg-green-50  dark:bg-green-900/25',    icon: '🟢' },
+  'WATCH':      { label: 'WATCH',      color: 'text-blue-700   dark:text-blue-300',     bg: 'bg-blue-50   dark:bg-blue-900/25',     icon: '🔵' },
+  'HOLD':       { label: 'HOLD',       color: 'text-amber-700  dark:text-amber-300',    bg: 'bg-amber-50  dark:bg-amber-900/25',    icon: '🟡' },
+  'SELL':       { label: 'SELL',       color: 'text-red-700    dark:text-red-300',      bg: 'bg-red-50    dark:bg-red-900/25',      icon: '🔴' },
 }
 
 function FinalVerdictCard({ result, currency = '$' }: { result: StockAnalysisResult; currency?: string }) {
-  const st  = result.st_analysis
-  const lt  = result.lt_analysis
-  const tech = result.technical
-  const fund = result.fundamentals
-  const rs   = result.rs_rating?.rs_score ?? 50
+  const [verdict, setVerdict] = useState<Record<string, unknown> | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [err, setErr]         = useState<string | null>(null)
 
-  if (!st && !lt) return null
+  const price = result.technical?.current_price ?? 0
+  const fmt   = (v: number | null | undefined) =>
+    v ? `${currency}${v.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '—'
+  const pct   = (v: number | null | undefined, base: number) =>
+    v && base ? `${v >= base ? '+' : ''}${((v - base) / base * 100).toFixed(1)}%` : ''
 
-  const price   = tech?.current_price ?? 0
-  const sma50   = tech?.sma50  ?? price
-  const sma200  = tech?.sma200 ?? price
-  const bbUpper = (tech as Record<string, number> | undefined)?.bb_upper ?? price * 1.05
-  const high52w = (tech as Record<string, number> | undefined)?.high_52w ?? price * 1.10
+  async function fetchVerdict() {
+    setLoading(true); setErr(null); setVerdict(null)
+    try {
+      const v = await apiGetVerdict(result)
+      setVerdict(v)
+    } catch (e: unknown) {
+      const msg = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail ?? 'Analysis failed'
+      setErr(msg)
+    } finally {
+      setLoading(false)
+    }
+  }
 
-  const stScore = st?.score ?? 50
-  const ltScore = lt?.score ?? 50
-  const stSig   = st?.signal ?? 'hold'
-  const ltSig   = lt?.signal ?? 'hold'
+  if (!result.st_analysis && !result.lt_analysis) return null
 
-  // Price targets — algorithmic from technical levels
-  const fmt = (v: number) => `${currency}${v.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-
-  // ST: 4-week horizon
-  const stBull  = price > 0 ? Math.min(bbUpper * 1.01, price * (1 + (Math.max(stScore - 50, 0) / 100) * 0.18)) : 0
-  const stStop  = price > 0 ? Math.max(sma50 * 0.97, price * 0.92) : 0   // 7-8% IBD stop or below 50d MA
-  const stRisk  = price > 0 ? ((price - stStop) / price * 100) : 0
-  const stRew   = price > 0 ? ((stBull - price) / price * 100) : 0
-
-  // LT: 12-month horizon
-  const ltUpside = (ltScore - 50) / 100 * 0.45   // max ~22.5% upside at score=100
-  const ltBull  = price > 0 ? Math.min(Math.max(high52w * 1.05, price * (1 + ltUpside)), price * 1.60) : 0
-  const ltStop  = price > 0 ? Math.max(sma200 * 0.95, price * 0.80) : 0
-
-  // Overall verdict — combines both horizons
-  const sigRank: Record<string, number> = { 'strong buy': 5, buy: 4, watch: 3, hold: 2, sell: 1 }
-  const avgRank = ((sigRank[stSig] ?? 3) + (sigRank[ltSig] ?? 3)) / 2
-  const overall = avgRank >= 4.5 ? 'STRONG BUY' : avgRank >= 3.8 ? 'BUY' : avgRank >= 3.0 ? 'WATCH / ACCUMULATE' : avgRank >= 2.0 ? 'NEUTRAL — HOLD' : 'AVOID / SELL'
-  const overallColor = avgRank >= 4.5 ? 'text-emerald-600' : avgRank >= 3.8 ? 'text-green-600' : avgRank >= 3.0 ? 'text-blue-600' : avgRank >= 2.0 ? 'text-amber-600' : 'text-red-600'
-
-  // Key factors — top 3 bull from ST + top 2 bear
-  const allReasons = [...(st?.reasoning ?? []), ...(lt?.reasoning ?? [])]
-  const bullReasons = allReasons.filter(r => !r.toLowerCase().match(/below|bearish|overb|risk|short|declining|negative|lagging|death|distribution/)).slice(0, 4)
-  const bearReasons = allReasons.filter(r =>  r.toLowerCase().match(/below|bearish|overb|risk|short|declining|negative|lagging|death|distribution/)).slice(0, 3)
-
-  // Risk level
-  const riskLevel = stScore < 40 || ltScore < 40 ? 'HIGH'
-    : stScore < 55 || ltScore < 55 ? 'MEDIUM'
-    : rs < 50 ? 'MEDIUM'
-    : 'LOW-MEDIUM'
-  const riskColor = riskLevel === 'HIGH' ? 'text-red-600' : riskLevel === 'MEDIUM' ? 'text-amber-600' : 'text-green-600'
-
-  const stCfg = VERDICT_CONFIG[stSig] ?? VERDICT_CONFIG['hold']
-  const ltCfg = VERDICT_CONFIG[ltSig] ?? VERDICT_CONFIG['hold']
+  const overall = (verdict?.overall as string) ?? ''
+  const oCfg    = VC[overall] ?? null
+  const stV     = (verdict?.st_verdict as string) ?? ''
+  const ltV     = (verdict?.lt_verdict as string) ?? ''
+  const stCfg   = VC[stV] ?? null
+  const ltCfg   = VC[ltV] ?? null
+  const conv    = (verdict?.conviction as string) ?? ''
+  const convColor = conv === 'HIGH' ? 'text-emerald-600' : conv === 'MEDIUM' ? 'text-amber-600' : 'text-red-500'
 
   return (
     <div className="card overflow-hidden border-2 border-primary/30">
       {/* Header */}
-      <div className="bg-gradient-to-r from-slate-800 to-slate-700 px-5 py-4">
-        <div className="flex items-center justify-between flex-wrap gap-2">
-          <div>
-            <div className="text-white font-extrabold text-lg tracking-tight">🎯 Final Verdict — {result.ticker}</div>
-            <div className="text-slate-300 text-xs mt-0.5">Synthesised from technical, fundamental, momentum & sentiment signals</div>
-          </div>
-          <div className={`text-xl font-black tracking-wide ${overallColor} bg-white/10 px-4 py-1.5 rounded-xl`}>
-            {overall}
-          </div>
+      <div className="bg-gradient-to-r from-slate-800 to-slate-700 px-5 py-4 flex items-center justify-between flex-wrap gap-3">
+        <div>
+          <div className="text-white font-extrabold text-lg tracking-tight">🎯 Final Verdict — {result.ticker}</div>
+          <div className="text-slate-400 text-xs mt-0.5">AI analyses every signal — technical, fundamental, momentum & sentiment — before deciding</div>
         </div>
+        {!verdict && (
+          <button onClick={fetchVerdict} disabled={loading}
+            className="bg-primary hover:bg-primary/90 text-white text-sm font-bold px-5 py-2.5 rounded-xl disabled:opacity-60 flex items-center gap-2">
+            {loading ? <><span className="animate-spin">⟳</span> Analysing…</> : '✨ Get AI Verdict'}
+          </button>
+        )}
+        {verdict && oCfg && (
+          <div className={`text-lg font-black px-5 py-2 rounded-xl ${oCfg.bg} ${oCfg.color} border border-current/20`}>
+            {oCfg.icon} {oCfg.label}
+            {conv && <span className={`ml-3 text-xs font-bold uppercase ${convColor}`}>· {conv} conviction</span>}
+          </div>
+        )}
       </div>
 
-      {/* ST + LT side-by-side */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 divide-y sm:divide-y-0 sm:divide-x divide-surface-border">
-        {/* Short-term */}
-        <div className={`p-5 ${stCfg.bg}`}>
-          <div className="flex items-center justify-between mb-3">
-            <div>
-              <div className="text-xs font-bold uppercase tracking-widest text-ink-faint mb-1">Short-Term · 1–4 Weeks</div>
-              <div className={`text-2xl font-black ${stCfg.color}`}>{stCfg.icon} {stCfg.label}</div>
-            </div>
-            <div className="text-right">
-              <div className="text-3xl font-black text-ink">{stScore.toFixed(0)}</div>
-              <div className="text-xs text-ink-faint">/ 100</div>
-            </div>
-          </div>
-          {price > 0 && (
-            <div className="grid grid-cols-2 gap-2 mt-3 text-xs">
-              <div className={`rounded-lg p-2.5 ${stSig === 'sell' ? 'bg-red-100 dark:bg-red-900/30' : 'bg-white/60 dark:bg-white/10'}`}>
-                <div className="text-ink-faint font-medium mb-0.5">{stSig === 'sell' ? 'Downside target' : '4-week target'}</div>
-                <div className={`font-black text-base ${stSig === 'sell' ? 'text-red-600' : 'text-green-600'}`}>{fmt(stBull)}</div>
-                <div className={`text-xs font-semibold ${stRew >= 0 ? 'text-green-600' : 'text-red-600'}`}>{stRew >= 0 ? '+' : ''}{stRew.toFixed(1)}%</div>
-              </div>
-              <div className="bg-red-50 dark:bg-red-900/20 rounded-lg p-2.5">
-                <div className="text-ink-faint font-medium mb-0.5">Stop loss</div>
-                <div className="font-black text-base text-red-600">{fmt(stStop)}</div>
-                <div className="text-xs text-red-500 font-semibold">−{stRisk.toFixed(1)}%</div>
-              </div>
+      {err && (
+        <div className="p-4 bg-red-50 dark:bg-red-900/20 text-red-600 text-sm">{err}</div>
+      )}
+
+      {loading && (
+        <div className="p-10 flex flex-col items-center gap-3 text-ink-muted">
+          <div className="text-3xl animate-spin">⟳</div>
+          <p className="text-sm">Reading every metric carefully — RSI, MACD, fundamentals, analyst consensus, patterns…</p>
+        </div>
+      )}
+
+      {verdict && (
+        <>
+          {/* Summary */}
+          {verdict.summary && (
+            <div className="px-5 py-4 bg-surface-muted border-b border-surface-border">
+              <p className="text-sm text-ink leading-relaxed">{verdict.summary as string}</p>
             </div>
           )}
-        </div>
 
-        {/* Long-term */}
-        <div className={`p-5 ${ltCfg.bg}`}>
-          <div className="flex items-center justify-between mb-3">
-            <div>
-              <div className="text-xs font-bold uppercase tracking-widest text-ink-faint mb-1">Long-Term · 3–12 Months</div>
-              {lt ? (
-                <div className={`text-2xl font-black ${ltCfg.color}`}>{ltCfg.icon} {ltCfg.label}</div>
-              ) : (
-                <div className="text-sm text-ink-muted italic">Run with Fundamentals enabled for LT score</div>
+          {/* ST + LT columns */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 divide-y sm:divide-y-0 sm:divide-x divide-surface-border">
+            {/* Short-term */}
+            <div className={`p-5 ${stCfg?.bg ?? ''}`}>
+              <div className="text-xs font-bold uppercase tracking-widest text-ink-faint mb-2">Short-Term · 1–4 Weeks</div>
+              {stCfg && <div className={`text-2xl font-black mb-3 ${stCfg.color}`}>{stCfg.icon} {stCfg.label}</div>}
+              {verdict.st_reasoning && (
+                <p className="text-xs text-ink-muted leading-relaxed mb-3">{verdict.st_reasoning as string}</p>
               )}
+              <div className="grid grid-cols-2 gap-2 text-xs">
+                <div className="bg-white/60 dark:bg-white/5 rounded-lg p-2.5">
+                  <div className="text-ink-faint mb-0.5">4-week target</div>
+                  <div className="font-black text-sm text-green-600">{fmt(verdict.st_target as number)}</div>
+                  <div className="text-green-600 font-semibold">{pct(verdict.st_target as number, price)}</div>
+                </div>
+                <div className="bg-red-50 dark:bg-red-900/20 rounded-lg p-2.5">
+                  <div className="text-ink-faint mb-0.5">Stop loss</div>
+                  <div className="font-black text-sm text-red-600">{fmt(verdict.st_stop as number)}</div>
+                  <div className="text-red-500 font-semibold">{pct(verdict.st_stop as number, price)}</div>
+                </div>
+              </div>
             </div>
-            {lt && (
-              <div className="text-right">
-                <div className="text-3xl font-black text-ink">{ltScore.toFixed(0)}</div>
-                <div className="text-xs text-ink-faint">/ 100</div>
+
+            {/* Long-term */}
+            <div className={`p-5 ${ltCfg?.bg ?? ''}`}>
+              <div className="text-xs font-bold uppercase tracking-widest text-ink-faint mb-2">Long-Term · 3–12 Months</div>
+              {ltCfg && <div className={`text-2xl font-black mb-3 ${ltCfg.color}`}>{ltCfg.icon} {ltCfg.label}</div>}
+              {verdict.lt_reasoning && (
+                <p className="text-xs text-ink-muted leading-relaxed mb-3">{verdict.lt_reasoning as string}</p>
+              )}
+              <div className="grid grid-cols-2 gap-2 text-xs">
+                <div className="bg-white/60 dark:bg-white/5 rounded-lg p-2.5">
+                  <div className="text-ink-faint mb-0.5">12-month target</div>
+                  <div className="font-black text-sm text-green-600">{fmt(verdict.lt_target as number)}</div>
+                  <div className="text-green-600 font-semibold">{pct(verdict.lt_target as number, price)}</div>
+                </div>
+                <div className="bg-amber-50 dark:bg-amber-900/20 rounded-lg p-2.5">
+                  <div className="text-ink-faint mb-0.5">Key support</div>
+                  <div className="font-black text-sm text-amber-700">{fmt(verdict.lt_support as number)}</div>
+                  <div className="text-amber-600 font-semibold">{pct(verdict.lt_support as number, price)}</div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Catalysts + Risks */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 divide-y sm:divide-y-0 sm:divide-x divide-surface-border border-t border-surface-border">
+            {Array.isArray(verdict.key_catalysts) && verdict.key_catalysts.length > 0 && (
+              <div className="p-4">
+                <div className="text-xs font-bold uppercase tracking-wide text-green-600 mb-2">✅ Key Catalysts</div>
+                <ul className="space-y-1.5">
+                  {(verdict.key_catalysts as string[]).map((c, i) => (
+                    <li key={i} className="text-xs text-ink-muted flex gap-1.5"><span className="text-green-500 flex-shrink-0 mt-0.5">▸</span>{c}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {Array.isArray(verdict.key_risks) && verdict.key_risks.length > 0 && (
+              <div className="p-4">
+                <div className="text-xs font-bold uppercase tracking-wide text-red-500 mb-2">⚠️ Key Risks</div>
+                <ul className="space-y-1.5">
+                  {(verdict.key_risks as string[]).map((r, i) => (
+                    <li key={i} className="text-xs text-ink-muted flex gap-1.5"><span className="text-red-400 flex-shrink-0 mt-0.5">▸</span>{r}</li>
+                  ))}
+                </ul>
               </div>
             )}
           </div>
-          {lt && price > 0 && (
-            <div className="grid grid-cols-2 gap-2 mt-3 text-xs">
-              <div className={`rounded-lg p-2.5 ${ltSig === 'sell' ? 'bg-red-100 dark:bg-red-900/30' : 'bg-white/60 dark:bg-white/10'}`}>
-                <div className="text-ink-faint font-medium mb-0.5">12-month target</div>
-                <div className={`font-black text-base ${ltSig === 'sell' ? 'text-red-600' : 'text-green-600'}`}>{fmt(ltBull)}</div>
-                <div className={`text-xs font-semibold ${ltBull >= price ? 'text-green-600' : 'text-red-600'}`}>
-                  {ltBull >= price ? '+' : ''}{((ltBull - price) / price * 100).toFixed(1)}%
-                </div>
-              </div>
-              <div className="bg-red-50 dark:bg-red-900/20 rounded-lg p-2.5">
-                <div className="text-ink-faint font-medium mb-0.5">Key support</div>
-                <div className="font-black text-base text-red-600">{fmt(ltStop)}</div>
-                <div className="text-xs text-red-500 font-semibold">−{((price - ltStop) / price * 100).toFixed(1)}%</div>
-              </div>
-            </div>
-          )}
-        </div>
-      </div>
 
-      {/* Key factors */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 divide-y sm:divide-y-0 sm:divide-x divide-surface-border border-t border-surface-border">
-        {bullReasons.length > 0 && (
-          <div className="p-4">
-            <div className="text-xs font-bold uppercase tracking-wide text-green-600 mb-2">✅ Bull Case</div>
-            <ul className="space-y-1">
-              {bullReasons.map((r, i) => (
-                <li key={i} className="text-xs text-ink-muted flex gap-1.5"><span className="text-green-500 flex-shrink-0">•</span>{r}</li>
-              ))}
-            </ul>
+          <div className="border-t border-surface-border px-5 py-3 bg-surface-muted flex items-center justify-between flex-wrap gap-2">
+            <span className="text-xs text-ink-faint">RS Rating <strong className="text-ink">{result.rs_rating?.rs_score ?? '—'}</strong>/100</span>
+            <button onClick={fetchVerdict} className="text-xs text-primary hover:underline">↺ Refresh verdict</button>
+            <span className="text-xs text-ink-faint italic">Not financial advice</span>
           </div>
-        )}
-        {bearReasons.length > 0 && (
-          <div className="p-4">
-            <div className="text-xs font-bold uppercase tracking-wide text-red-500 mb-2">⚠️ Risk Factors</div>
-            <ul className="space-y-1">
-              {bearReasons.map((r, i) => (
-                <li key={i} className="text-xs text-ink-muted flex gap-1.5"><span className="text-red-400 flex-shrink-0">•</span>{r}</li>
-              ))}
-            </ul>
-          </div>
-        )}
-      </div>
-
-      {/* Footer */}
-      <div className="border-t border-surface-border px-5 py-3 bg-surface-muted flex items-center justify-between flex-wrap gap-2 text-xs text-ink-faint">
-        <span>RS Rating <strong className="text-ink">{rs}</strong>/100 · Risk level <strong className={riskColor}>{riskLevel}</strong> · Based on {allReasons.length} weighted signals</span>
-        <span className="italic">Not financial advice — always do your own research</span>
-      </div>
+        </>
+      )}
     </div>
   )
 }

@@ -302,6 +302,132 @@ Guidelines:
     )
 
 
+@router.post("/verdict")
+async def get_verdict(
+    body: dict,
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    Feed all analysis metrics to Claude and return a structured, carefully-reasoned verdict.
+    Expects the full analysis result dict from the frontend.
+    """
+    import anthropic
+    from backend.config import settings
+
+    if not settings.anthropic_api_key:
+        raise HTTPException(status_code=503, detail="AI verdict requires API mode (ANTHROPIC_API_KEY not configured)")
+
+    ticker = (body.get("ticker") or "").upper().strip()
+    if not ticker:
+        raise HTTPException(status_code=400, detail="ticker required")
+
+    st   = body.get("st_analysis") or {}
+    lt   = body.get("lt_analysis") or {}
+    tech = body.get("technical") or {}
+    fund = body.get("fundamentals") or {}
+    rs   = (body.get("rs_rating") or {}).get("rs_score", 50)
+    weekly = body.get("weekly") or {}
+    analyst = body.get("analyst") or {}
+    patterns = body.get("patterns") or []
+
+    price = tech.get("current_price", 0)
+
+    # Build a compact but comprehensive data brief for Claude
+    brief = f"""
+STOCK: {ticker}   CURRENT PRICE: ${price:.2f}
+
+=== MOMENTUM SCORES (your own scoring system) ===
+Short-term score (1-4 weeks):  {st.get('score', 'N/A')}/100 — {st.get('signal', 'N/A').upper()}
+Long-term score  (3-12 months): {lt.get('score', 'N/A') if lt else 'N/A (fundamentals not loaded)'}/100 — {lt.get('signal', 'N/A').upper() if lt else 'N/A'}
+RS Rating (vs S&P 500):        {rs}/100  (80+ = outperforming 80% of stocks)
+
+=== TECHNICAL INDICATORS ===
+RSI (14):        {tech.get('rsi', 'N/A')}   (30=oversold, 70=overbought; ideal buy zone 50-65)
+MACD:            {tech.get('macd', 'N/A'):.4f} vs signal {tech.get('macd_signal', 'N/A'):.4f} — histogram {tech.get('macd_hist', 'N/A'):.4f}
+50-day SMA:      ${tech.get('sma50', 'N/A')}   (price {'ABOVE' if price and tech.get('sma50') and price > tech['sma50'] else 'BELOW'})
+200-day SMA:     ${tech.get('sma200', 'N/A')}  (price {'ABOVE' if price and tech.get('sma200') and price > tech['sma200'] else 'BELOW'})
+52W High/Low:    ${tech.get('high_52w', 'N/A')} / ${tech.get('low_52w', 'N/A')}
+Volume ratio:    {tech.get('vol_ratio', 'N/A')}x average  ({tech.get('vol_signal', 'neutral')} trend)
+Weekly trend:    {weekly.get('trend_w', 'N/A')}   MACD weekly: {'bullish' if weekly.get('macd_above_signal_w') else 'bearish'}
+Bollinger Bands: upper ${tech.get('bb_upper', 'N/A')}, lower ${tech.get('bb_lower', 'N/A')}
+Day change:      {tech.get('day_change_pct', 'N/A')}%
+
+=== FUNDAMENTALS ===
+P/E (TTM):       {fund.get('pe_ratio', 'N/A')}    Forward P/E: {fund.get('forward_pe', 'N/A')}
+EPS growth (YoY):{f"{fund['eps_growth']*100:.1f}%" if fund.get('eps_growth') is not None else 'N/A'}
+Revenue growth:  {f"{fund['revenue_growth']*100:.1f}%" if fund.get('revenue_growth') is not None else 'N/A'}
+Net margin:      {f"{fund['profit_margin']*100:.1f}%" if fund.get('profit_margin') is not None else 'N/A'}
+ROE:             {f"{fund['return_on_equity']*100:.1f}%" if fund.get('return_on_equity') is not None else 'N/A'}
+Debt/Equity:     {fund.get('debt_to_equity', 'N/A')}
+Short interest:  {f"{fund['short_pct_float']*100:.1f}%" if fund.get('short_pct_float') is not None else 'N/A'}
+
+=== ANALYST CONSENSUS ===
+{analyst.get('recommendation', 'N/A')}  —  Buy: {analyst.get('strong_buy', 0)+analyst.get('buy', 0)}  Hold: {analyst.get('hold', 0)}  Sell: {analyst.get('sell', 0)+analyst.get('strong_sell', 0)}
+Mean target: ${analyst.get('target_mean', 'N/A')}   High: ${analyst.get('target_high', 'N/A')}   Low: ${analyst.get('target_low', 'N/A')}
+
+=== ST SIGNAL REASONS ===
+{chr(10).join(f"• {r}" for r in (st.get('reasoning') or [])[:8])}
+
+=== LT SIGNAL REASONS ===
+{chr(10).join(f"• {r}" for r in (lt.get('reasoning') or [])[:8]) if lt else "• Run analysis with Fundamentals enabled for LT data"}
+
+=== CHART PATTERNS ===
+{chr(10).join(f"• {p.get('name','')}: {p.get('description','')}" for p in patterns[:5]) or "None detected"}
+""".strip()
+
+    prompt = f"""{brief}
+
+---
+You are a professional equity analyst. Carefully read every metric above and give a FINAL VERDICT.
+
+Think step by step:
+1. What does momentum (RS Rating, RSI, MACD, volume) say about near-term direction?
+2. What does the trend structure (SMA50/200, weekly) say about the bigger picture?
+3. What do fundamentals (earnings growth, margins, valuation) tell us about quality and value?
+4. Are there any warning signs (overbought, high debt, distribution volume, low RS)?
+5. What does the analyst consensus add to the picture?
+6. Does the bull and bear case outweigh each other — and by how much?
+
+Return ONLY valid JSON in this exact schema (no markdown, no extra text):
+{{
+  "overall": "STRONG BUY|BUY|WATCH|HOLD|SELL",
+  "conviction": "HIGH|MEDIUM|LOW",
+  "st_verdict": "BUY|WATCH|HOLD|SELL",
+  "st_target": <number — realistic 4-week price target>,
+  "st_stop": <number — stop-loss level>,
+  "st_reasoning": "<2 sentences explaining the short-term call>",
+  "lt_verdict": "BUY|WATCH|HOLD|SELL",
+  "lt_target": <number — realistic 12-month price target>,
+  "lt_support": <number — key long-term support>,
+  "lt_reasoning": "<2 sentences explaining the long-term call>",
+  "key_catalysts": ["<catalyst 1>", "<catalyst 2>", "<catalyst 3>"],
+  "key_risks": ["<risk 1>", "<risk 2>", "<risk 3>"],
+  "summary": "<3-4 sentence overall assessment weighing all evidence>"
+}}"""
+
+    try:
+        client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=1024,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = msg.content[0].text.strip()
+        # Strip markdown fences if present
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+        verdict = json.loads(raw)
+        verdict["ticker"] = ticker
+        verdict["price"]  = price
+        return verdict
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=500, detail=f"AI returned invalid JSON: {exc}")
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
 @router.get("/snapshot")
 async def stock_snapshot(
     ticker: str,
