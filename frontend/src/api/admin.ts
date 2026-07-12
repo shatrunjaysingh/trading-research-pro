@@ -40,3 +40,13 @@ export const apiGetHistoricalBacktest = () =>
 // Send digest
 export const apiSendDigest = () =>
   client.post('/admin/send-digest', null, { timeout: 120_000 }).then(r => r.data)
+
+// Digest email list
+export const apiGetDigestEmails = () =>
+  client.get('/admin/digest-emails').then(r => r.data)
+export const apiAddDigestEmail = (email: string, name: string) =>
+  client.post('/admin/digest-emails', { email, name }).then(r => r.data)
+export const apiToggleDigestEmail = (id: number, is_active: boolean) =>
+  client.patch(`/admin/digest-emails/${id}`, { is_active }).then(r => r.data)
+export const apiDeleteDigestEmail = (id: number) =>
+  client.delete(`/admin/digest-emails/${id}`).then(r => r.data)

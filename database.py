@@ -344,6 +344,15 @@ _SCHEMA_STATEMENTS = [
       END IF;
     END $$
     """,
+    """
+    CREATE TABLE IF NOT EXISTS digest_email_list (
+        id         SERIAL PRIMARY KEY,
+        email      TEXT NOT NULL UNIQUE,
+        name       TEXT NOT NULL DEFAULT '',
+        is_active  BOOLEAN DEFAULT TRUE,
+        added_at   TIMESTAMPTZ DEFAULT NOW()
+    )
+    """,
 ]
 
 
@@ -1406,6 +1415,40 @@ def set_digest_enabled(user_id: int, enabled: bool) -> bool:
     with get_db() as conn:
         cur = conn.cursor()
         cur.execute("UPDATE users SET digest_enabled = %s WHERE id = %s", (enabled, user_id))
+        return cur.rowcount > 0
+
+
+def get_digest_email_list() -> list[dict]:
+    with get_db() as conn:
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute("SELECT id, email, name, is_active, added_at FROM digest_email_list ORDER BY added_at DESC")
+        return [dict(r) for r in cur.fetchall()]
+
+
+def add_digest_email(email: str, name: str = "") -> dict:
+    with get_db() as conn:
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute(
+            """INSERT INTO digest_email_list (email, name)
+               VALUES (%s, %s)
+               ON CONFLICT (email) DO UPDATE SET name = EXCLUDED.name, is_active = TRUE
+               RETURNING id, email, name, is_active, added_at""",
+            (email.strip().lower(), name.strip()),
+        )
+        return dict(cur.fetchone())
+
+
+def toggle_digest_email(email_id: int, active: bool) -> bool:
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute("UPDATE digest_email_list SET is_active = %s WHERE id = %s", (active, email_id))
+        return cur.rowcount > 0
+
+
+def delete_digest_email(email_id: int) -> bool:
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM digest_email_list WHERE id = %s", (email_id,))
         return cur.rowcount > 0
 
 

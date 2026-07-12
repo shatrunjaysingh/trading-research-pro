@@ -1,9 +1,10 @@
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 
-from fastapi import APIRouter, HTTPException, Depends, status
+from fastapi import APIRouter, HTTPException, Depends, status, Body
 
 import auth as auth_module
+import database as db
 from database import (
     get_all_users, create_user, update_user, deactivate_user, activate_user,
     change_password, get_all_licenses, create_license, update_license,
@@ -296,6 +297,31 @@ def get_hist_backtest(admin: dict = Depends(_require_admin)):
     if not data:
         return {"message": "No historical backtest results yet. Run POST /admin/historical-backtest."}
     return data
+
+
+@router.get("/digest-emails")
+def list_digest_emails(admin: dict = Depends(_require_admin)):
+    return db.get_digest_email_list()
+
+
+@router.post("/digest-emails")
+def add_digest_email(body: dict = Body(...), admin: dict = Depends(_require_admin)):
+    email = (body.get("email") or "").strip()
+    if not email or "@" not in email:
+        raise HTTPException(status_code=400, detail="Valid email required")
+    return db.add_digest_email(email, body.get("name", ""))
+
+
+@router.patch("/digest-emails/{email_id}")
+def toggle_digest_email(email_id: int, body: dict = Body(...), admin: dict = Depends(_require_admin)):
+    db.toggle_digest_email(email_id, bool(body.get("is_active", True)))
+    return {"ok": True}
+
+
+@router.delete("/digest-emails/{email_id}")
+def delete_digest_email(email_id: int, admin: dict = Depends(_require_admin)):
+    db.delete_digest_email(email_id)
+    return {"ok": True}
 
 
 @router.post("/send-digest")

@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { apiGetUsers, apiGetLicenses, apiGetAudit, apiCreateUser, apiUpdateUser, apiDeactivateUser, apiActivateUser, apiGetTokenUsage, apiGetBacktest, apiRunHistoricalBacktest, apiGetHistoricalBacktest, apiGetRegime, apiSendDigest } from '../api/admin'
+import { apiGetUsers, apiGetLicenses, apiGetAudit, apiCreateUser, apiUpdateUser, apiDeactivateUser, apiActivateUser, apiGetTokenUsage, apiGetBacktest, apiRunHistoricalBacktest, apiGetHistoricalBacktest, apiGetRegime, apiSendDigest, apiGetDigestEmails, apiAddDigestEmail, apiToggleDigestEmail, apiDeleteDigestEmail } from '../api/admin'
 import { RoleBadge, TierBadge, StatusBadge } from '../components/ui/Badge'
 import { KpiCard } from '../components/ui/KpiCard'
 import { Spinner } from '../components/ui/Spinner'
@@ -917,9 +917,140 @@ function HistoricalBacktestTab() {
   )
 }
 
+// ── Digest Email List tab ──────────────────────────────────────────────────────
+interface DigestEmail { id: number; email: string; name: string; is_active: boolean; added_at: string }
+
+function DigestEmailsTab() {
+  const qc = useQueryClient()
+  const [emailInput, setEmailInput] = useState('')
+  const [nameInput, setNameInput]   = useState('')
+  const [err, setErr] = useState('')
+
+  const { data: list = [], isLoading } = useQuery<DigestEmail[]>({
+    queryKey: ['digest-emails'],
+    queryFn:  apiGetDigestEmails,
+  })
+
+  const addMut = useMutation({
+    mutationFn: () => apiAddDigestEmail(emailInput.trim(), nameInput.trim()),
+    onSuccess:  () => { qc.invalidateQueries({ queryKey: ['digest-emails'] }); setEmailInput(''); setNameInput(''); setErr('') },
+    onError:    (e: unknown) => setErr((e as { response?: { data?: { detail?: string } } })?.response?.data?.detail || 'Failed to add'),
+  })
+
+  const toggleMut = useMutation({
+    mutationFn: ({ id, is_active }: { id: number; is_active: boolean }) => apiToggleDigestEmail(id, is_active),
+    onSuccess:  () => qc.invalidateQueries({ queryKey: ['digest-emails'] }),
+  })
+
+  const deleteMut = useMutation({
+    mutationFn: (id: number) => apiDeleteDigestEmail(id),
+    onSuccess:  () => qc.invalidateQueries({ queryKey: ['digest-emails'] }),
+  })
+
+  const active = list.filter(e => e.is_active).length
+
+  return (
+    <div className="space-y-6">
+      <div className="flex gap-4 flex-wrap">
+        <KpiCard value={list.length} label="Total Addresses" />
+        <KpiCard value={active}      label="Active (will receive digest)" />
+      </div>
+
+      {/* Add form */}
+      <div className="card p-5">
+        <h3 className="font-bold text-ink mb-4">Add Email Address</h3>
+        <div className="flex gap-3 flex-wrap items-end">
+          <div className="flex-1 min-w-48">
+            <label className="label">Email address</label>
+            <input
+              type="email"
+              className="input"
+              placeholder="someone@example.com"
+              value={emailInput}
+              onChange={e => setEmailInput(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && addMut.mutate()}
+            />
+          </div>
+          <div className="flex-1 min-w-36">
+            <label className="label">Name (optional)</label>
+            <input
+              type="text"
+              className="input"
+              placeholder="John"
+              value={nameInput}
+              onChange={e => setNameInput(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && addMut.mutate()}
+            />
+          </div>
+          <button
+            onClick={() => addMut.mutate()}
+            disabled={addMut.isPending || !emailInput.trim()}
+            className="btn-primary disabled:opacity-50"
+          >
+            {addMut.isPending ? 'Adding…' : '+ Add'}
+          </button>
+        </div>
+        {err && <p className="text-red-600 text-sm mt-2">{err}</p>}
+      </div>
+
+      {/* List */}
+      {isLoading ? (
+        <div className="flex items-center justify-center h-32"><Spinner /></div>
+      ) : list.length === 0 ? (
+        <div className="card p-8 text-center text-ink-faint">
+          <p className="text-lg mb-1">No email addresses yet</p>
+          <p className="text-sm">Add addresses above — they'll receive the daily digest regardless of user accounts.</p>
+        </div>
+      ) : (
+        <div className="card overflow-hidden">
+          <table className="w-full text-sm">
+            <thead className="bg-surface-muted border-b border-surface-border">
+              <tr>
+                {['Email', 'Name', 'Added', 'Status', 'Actions'].map(h => (
+                  <th key={h} className="px-4 py-3 text-left text-xs font-bold uppercase tracking-wide text-ink-faint">{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-surface-border">
+              {list.map(e => (
+                <tr key={e.id} className="hover:bg-surface-muted/40 transition-colors">
+                  <td className="px-4 py-3 font-medium text-ink">{e.email}</td>
+                  <td className="px-4 py-3 text-ink-muted">{e.name || '—'}</td>
+                  <td className="px-4 py-3 text-xs text-ink-muted">{e.added_at?.slice(0, 10)}</td>
+                  <td className="px-4 py-3">
+                    <span className={`text-xs px-2 py-0.5 rounded font-semibold ${e.is_active ? 'bg-green-100 text-green-800' : 'bg-surface-muted text-ink-faint'}`}>
+                      {e.is_active ? 'Active' : 'Paused'}
+                    </span>
+                  </td>
+                  <td className="px-4 py-3">
+                    <div className="flex gap-1.5">
+                      <button
+                        onClick={() => toggleMut.mutate({ id: e.id, is_active: !e.is_active })}
+                        className={`text-xs py-1 px-2 rounded-lg font-semibold transition-all ${e.is_active ? 'bg-yellow-50 text-yellow-700 hover:bg-yellow-100' : 'bg-green-50 text-green-700 hover:bg-green-100'}`}
+                      >
+                        {e.is_active ? 'Pause' : 'Resume'}
+                      </button>
+                      <button
+                        onClick={() => deleteMut.mutate(e.id)}
+                        className="text-xs py-1 px-2 rounded-lg font-semibold bg-red-50 text-red-600 hover:bg-red-100 transition-all"
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ── Main ───────────────────────────────────────────────────────────────────────
 export function AdminPanel() {
-  const [tab, setTab] = useState<'overview'|'users'|'licenses'|'audit'|'tokens'|'backtest'|'hist-backtest'>('overview')
+  const [tab, setTab] = useState<'overview'|'users'|'licenses'|'audit'|'tokens'|'backtest'|'hist-backtest'|'digest-emails'>('overview')
   const { data: users    = [], isLoading: lu } = useQuery({ queryKey:['admin-users'],    queryFn:apiGetUsers })
   const { data: licenses = [], isLoading: ll } = useQuery({ queryKey:['admin-licenses'], queryFn:apiGetLicenses })
 
@@ -933,6 +1064,7 @@ export function AdminPanel() {
     { key:'tokens',        label:'💰 Token Usage' },
     { key:'backtest',      label:'📈 Backtest' },
     { key:'hist-backtest', label:'🔬 Hist Backtest' },
+    { key:'digest-emails', label:'📧 Digest Emails' },
   ] as const
 
   return (
@@ -958,6 +1090,7 @@ export function AdminPanel() {
       {tab === 'tokens'        && <TokenUsageTab />}
       {tab === 'backtest'      && <BacktestTab />}
       {tab === 'hist-backtest' && <HistoricalBacktestTab />}
+      {tab === 'digest-emails' && <DigestEmailsTab />}
     </div>
   )
 }

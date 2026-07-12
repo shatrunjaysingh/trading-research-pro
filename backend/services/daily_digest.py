@@ -180,24 +180,44 @@ def run_daily_digest(force: bool = False) -> dict:
         except Exception:
             subscribed = []
 
-        for user in subscribed:
+        # Also include addresses from the admin-managed email list
+        try:
+            extra_emails = [e for e in db.get_digest_email_list() if e.get("is_active")]
+        except Exception:
+            extra_emails = []
+
+        # Merge: use a set to avoid duplicate sends
+        seen_emails: set[str] = set()
+        all_recipients: list[dict] = []
+        for u in subscribed:
+            e = (u.get("email") or "").lower()
+            if e and e not in seen_emails:
+                seen_emails.add(e)
+                all_recipients.append({"email": u["email"], "name": u.get("full_name") or u.get("username") or "Trader", "user_id": u.get("id")})
+        for e in extra_emails:
+            addr = (e.get("email") or "").lower()
+            if addr and addr not in seen_emails:
+                seen_emails.add(addr)
+                all_recipients.append({"email": e["email"], "name": e.get("name") or "Trader", "user_id": None})
+
+        for recipient in all_recipients:
             try:
-                user_portfolio = all_saved_portfolios.get(user["id"])
+                user_portfolio = all_saved_portfolios.get(recipient.get("user_id")) if recipient.get("user_id") else None
                 html = build_digest_html(
                     picks=email_picks,
-                    user_name=user.get("full_name") or user.get("username") or "Trader",
+                    user_name=recipient["name"],
                     date_str=date_str,
                     portfolio_holdings=user_portfolio,
                 )
                 ok = send_email(
-                    to_email=user["email"],
+                    to_email=recipient["email"],
                     subject=f"📈 TradingResearch Daily — Top picks for {today.strftime('%b %-d')}",
                     html_body=html,
                 )
                 if ok:
                     users_sent += 1
             except Exception as exc:
-                logger.error("Failed to send digest to %s: %s", user.get("email"), exc)
+                logger.error("Failed to send digest to %s: %s", recipient.get("email"), exc)
 
         # Log to DB
         try:
