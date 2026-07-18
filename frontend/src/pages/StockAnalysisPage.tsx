@@ -1499,10 +1499,21 @@ function FinalVerdictCard({ result, currency = '$' }: { result: StockAnalysisRes
 
       {verdict && (
         <>
-          {/* Summary */}
-          {verdict.summary && (
-            <div className="px-5 py-4 bg-surface-muted border-b border-surface-border">
-              <p className="text-sm text-ink leading-relaxed">{verdict.summary as string}</p>
+          {/* Summary + thesis type + variant perception */}
+          {!!(verdict.summary || verdict.thesis_type || verdict.variant_perception) && (
+            <div className="px-5 py-4 bg-surface-muted border-b border-surface-border space-y-3">
+              {!!verdict.thesis_type && (
+                <span className="inline-block text-[11px] font-bold uppercase tracking-wide px-2.5 py-1 rounded-full bg-primary/10 text-primary">
+                  {verdict.thesis_type as string}
+                </span>
+              )}
+              {!!verdict.summary && <p className="text-sm text-ink leading-relaxed">{verdict.summary as string}</p>}
+              {!!verdict.variant_perception && (
+                <div className="border-l-2 border-primary/50 pl-3">
+                  <div className="text-[10px] font-bold uppercase tracking-wider text-primary mb-0.5">Variant Perception — the edge</div>
+                  <p className="text-xs text-ink-muted leading-relaxed italic">{verdict.variant_perception as string}</p>
+                </div>
+              )}
             </div>
           )}
 
@@ -1574,6 +1585,33 @@ function FinalVerdictCard({ result, currency = '$' }: { result: StockAnalysisRes
               </div>
             )}
           </div>
+
+          {/* Invalidation ("what would change my mind") + sell discipline */}
+          {(Array.isArray(verdict.invalidation) && verdict.invalidation.length > 0 ||
+            Array.isArray(verdict.sell_rules) && verdict.sell_rules.length > 0) && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 divide-y sm:divide-y-0 sm:divide-x divide-surface-border border-t border-surface-border">
+              {Array.isArray(verdict.invalidation) && verdict.invalidation.length > 0 && (
+                <div className="p-4">
+                  <div className="text-xs font-bold uppercase tracking-wide text-amber-600 mb-2">🔄 What Would Change My Mind</div>
+                  <ul className="space-y-1.5">
+                    {(verdict.invalidation as string[]).map((r, i) => (
+                      <li key={i} className="text-xs text-ink-muted flex gap-1.5"><span className="text-amber-500 flex-shrink-0 mt-0.5">▸</span>{r}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {Array.isArray(verdict.sell_rules) && verdict.sell_rules.length > 0 && (
+                <div className="p-4">
+                  <div className="text-xs font-bold uppercase tracking-wide text-ink-faint mb-2">🚪 Sell Discipline</div>
+                  <ul className="space-y-1.5">
+                    {(verdict.sell_rules as string[]).map((r, i) => (
+                      <li key={i} className="text-xs text-ink-muted flex gap-1.5"><span className="text-ink-faint flex-shrink-0 mt-0.5">▸</span>{r}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+          )}
 
           <div className="border-t border-surface-border px-5 py-3 bg-surface-muted flex items-center justify-between flex-wrap gap-2">
             <span className="text-xs text-ink-faint">RS Rating <strong className="text-ink">{result.rs_rating?.rs_score ?? '—'}</strong>/100</span>

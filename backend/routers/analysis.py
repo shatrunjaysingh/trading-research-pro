@@ -378,34 +378,62 @@ Mean target: ${analyst.get('target_mean', 'N/A')}   High: ${analyst.get('target_
 {chr(10).join(f"• {p.get('name','')}: {p.get('description','')}" for p in patterns[:5]) or "None detected"}
 """.strip()
 
+    # ── Ground the verdict in the cross-sectional factor decomposition ────────
+    factor = body.get("factor_analysis") or {}
+    health = body.get("financial_health") or {}
+    if factor.get("families"):
+        fams = factor["families"]
+        def _fp(k: str) -> str:
+            v = (fams.get(k) or {}).get("percentile")
+            return f"{v:.0f}th pct" if v is not None else "n/a"
+        basis = "vs {} large-caps".format(factor.get("universe_n")) if factor.get("basis") == "cross-sectional" else "vs baseline norms"
+        brief += f"""
+
+=== CROSS-SECTIONAL FACTOR RANKING ({basis}) ===
+Composite: {factor.get('composite')}/100   Conviction (factor breadth): {factor.get('conviction')}%
+Momentum {_fp('momentum')} | Value {_fp('value')} | Quality {_fp('quality')} | Growth {_fp('growth')} | Revisions {_fp('revisions')} | Low-Vol {_fp('low_vol')}"""
+    if health:
+        hp = []
+        if health.get("piotroski") is not None:       hp.append(f"Piotroski {health['piotroski']}/9")
+        if health.get("altman_z") is not None:         hp.append(f"Altman-Z {health['altman_z']}")
+        if health.get("roic") is not None:             hp.append(f"ROIC {health['roic']*100:.0f}%")
+        if health.get("fcf_yield") is not None:        hp.append(f"FCF yield {health['fcf_yield']*100:.1f}%")
+        if health.get("fcf_conversion") is not None:   hp.append(f"FCF conversion {health['fcf_conversion']*100:.0f}%")
+        if health.get("revision_score") is not None:   hp.append(f"Net analyst revisions {health['revision_score']:+.0f}")
+        if hp:
+            brief += "\n\n=== FINANCIAL HEALTH ===\n" + "   ".join(hp)
+
     prompt = f"""{brief}
 
 ---
-You are a professional equity analyst. Carefully read every metric above and give a FINAL VERDICT.
+You are a senior portfolio manager writing a decision memo. Reason like an institutional investor: form a differentiated thesis, name the variant perception, and define exactly what would prove you wrong. Anchor every claim to the factor percentiles and metrics above — do not hand-wave.
 
 Think step by step:
-1. What does momentum (RS Rating, RSI, MACD, volume) say about near-term direction?
-2. What does the trend structure (SMA50/200, weekly) say about the bigger picture?
-3. What do fundamentals (earnings growth, margins, valuation) tell us about quality and value?
-4. Are there any warning signs (overbought, high debt, distribution volume, low RS)?
-5. What does the analyst consensus add to the picture?
-6. Does the bull and bear case outweigh each other — and by how much?
+1. Which factors is this stock strong/weak on (use the percentile ranking)? Is it a leader (broad strength), a value trap (cheap but weak momentum/quality), or a crowded momentum name (strong momentum, poor value/quality)?
+2. What does the trend structure (SMA50/200, weekly) and financial health (Piotroski, Altman-Z, ROIC, FCF) say about durability and downside?
+3. What is the VARIANT PERCEPTION — what might the market be mispricing here, and why (bull or bear)?
+4. What concrete, observable events would INVALIDATE this thesis (specific factor/price/fundamental triggers)?
+5. Weigh bull vs bear — how decisively, and how does that map to conviction?
 
 Return ONLY valid JSON in this exact schema (no markdown, no extra text):
 {{
   "overall": "STRONG BUY|BUY|WATCH|HOLD|SELL",
   "conviction": "HIGH|MEDIUM|LOW",
+  "thesis_type": "<one of: Leader | Value Trap | Crowded Momentum | Turnaround | Falling Knife | Quality Compounder | Deep Value>",
+  "variant_perception": "<1-2 sentences: what the market may be mispricing and why — the edge>",
   "st_verdict": "BUY|WATCH|HOLD|SELL",
   "st_target": <number — realistic 4-week price target>,
   "st_stop": <number — stop-loss level>,
-  "st_reasoning": "<2 sentences explaining the short-term call>",
+  "st_reasoning": "<2 sentences explaining the short-term call, citing factors>",
   "lt_verdict": "BUY|WATCH|HOLD|SELL",
   "lt_target": <number — realistic 12-month price target>,
   "lt_support": <number — key long-term support>,
-  "lt_reasoning": "<2 sentences explaining the long-term call>",
-  "key_catalysts": ["<catalyst 1>", "<catalyst 2>", "<catalyst 3>"],
+  "lt_reasoning": "<2 sentences explaining the long-term call, citing factors>",
+  "key_catalysts": ["<catalyst 1 with rough timing if known>", "<catalyst 2>", "<catalyst 3>"],
   "key_risks": ["<risk 1>", "<risk 2>", "<risk 3>"],
-  "summary": "<3-4 sentence overall assessment weighing all evidence>"
+  "invalidation": ["<concrete trigger that would prove the thesis wrong>", "<trigger 2>"],
+  "sell_rules": ["<explicit rule for exiting, e.g. 'exit if composite < 45 for 3 days' or 'trim below 200-day MA'>", "<rule 2>"],
+  "summary": "<3-4 sentence PM-style assessment weighing all evidence>"
 }}"""
 
     try:
