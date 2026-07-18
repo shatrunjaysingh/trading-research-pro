@@ -132,11 +132,17 @@ def _compute_bollinger(
     return round(mid + std_mult * std, 4), round(mid - std_mult * std, 4), round(mid, 4)
 
 
-def _signal_from_indicators(tech: dict) -> tuple[str, float, float]:
-    """Returns (signal, score, confidence_pct).
+def _raw_signal_score(tech: dict) -> tuple[float, float]:
+    """Compute a DURABLE raw momentum score (0–100) and an agreement fraction.
 
-    Confidence measures indicator agreement: how many active indicators
-    point in the same direction as the final signal (0–100).
+    Deliberately built only from slow-moving trend/momentum indicators (RSI,
+    MACD, price vs 50/200-day MAs). Single-day noise — day change, intraday
+    VWAP, last-vs-average volume — is *excluded* from the score: those drove the
+    old signal's overnight flip-flops. They remain in `tech` for display only.
+
+    Returns (raw_score, agreement) where agreement ∈ [0,1] is how one-sided the
+    indicator votes are (|net votes| / total). The stabilizer turns this raw
+    score into the smoothed, hysteresis-gated signal and honest confidence.
     """
     score = 50.0
     votes: list[int] = []   # +1 = bullish, -1 = bearish, 0 = neutral
@@ -144,13 +150,13 @@ def _signal_from_indicators(tech: dict) -> tuple[str, float, float]:
     rsi = tech.get("rsi")
     if rsi is not None:
         if rsi < 30:
-            score += 15; votes.append(1)
+            score += 12; votes.append(1)
         elif rsi < 45:
-            score += 7;  votes.append(1)
+            score += 6;  votes.append(1)
         elif rsi > 70:
-            score -= 15; votes.append(-1)
+            score -= 12; votes.append(-1)
         elif rsi > 55:
-            score -= 5;  votes.append(-1)
+            score -= 6;  votes.append(-1)
         else:
             votes.append(0)
 
@@ -158,9 +164,9 @@ def _signal_from_indicators(tech: dict) -> tuple[str, float, float]:
     macd_sig = tech.get("macd_signal")
     if macd is not None and macd_sig is not None:
         if macd > macd_sig:
-            score += 10; votes.append(1)
+            score += 8; votes.append(1)
         else:
-            score -= 10; votes.append(-1)
+            score -= 8; votes.append(-1)
 
     close = tech.get("current_price")
     sma50 = tech.get("sma50")
@@ -176,54 +182,17 @@ def _signal_from_indicators(tech: dict) -> tuple[str, float, float]:
         else:
             score -= 7; votes.append(-1)
 
+    # Day change is kept only as a tiny freshness tilt (±3 max) and does NOT
+    # vote — it must never be strong enough to flip the signal on its own.
     day_chg = tech.get("day_change_pct")
     if day_chg is not None:
-        adj = min(max(day_chg * 3, -10), 10)
-        score += adj
-        votes.append(1 if adj > 0 else (-1 if adj < 0 else 0))
-
-    vol_ratio = tech.get("vol_ratio")
-    if vol_ratio and vol_ratio > 1.5:
-        score += 5; votes.append(1)
-
-    # Bollinger position
-    bb_upper = tech.get("bb_upper")
-    bb_lower = tech.get("bb_lower")
-    if close and bb_upper and bb_lower:
-        if close < bb_lower:
-            votes.append(1)   # oversold — potential bounce
-        elif close > bb_upper:
-            votes.append(-1)  # overbought — potential reversal
-        else:
-            votes.append(0)
-
-    # VWAP: price above VWAP is bullish intraday momentum
-    vwap = tech.get("vwap")
-    if close and vwap:
-        if close > vwap:
-            score += 6; votes.append(1)
-        else:
-            score -= 4; votes.append(-1)
+        score += min(max(day_chg * 1.0, -3), 3)
 
     score = round(min(max(score, 0), 100), 1)
 
-    if score >= 65:
-        signal = "buy"
-        aligned = sum(1 for v in votes if v == 1)
-    elif score >= 52:
-        signal = "watch"
-        aligned = sum(1 for v in votes if v >= 0)
-    elif score >= 38:
-        signal = "hold"
-        aligned = sum(1 for v in votes if v == 0)
-    else:
-        signal = "sell"
-        aligned = sum(1 for v in votes if v == -1)
-
     total = len(votes)
-    confidence = round((aligned / total * 100) if total > 0 else 50.0, 1)
-
-    return signal, score, confidence
+    agreement = (abs(sum(votes)) / total) if total > 0 else 0.0
+    return score, round(agreement, 3)
 
 
 def _compute_weekly_confirmation(ticker: str) -> dict:
@@ -578,10 +547,18 @@ def _fetch_stock_data(
     tech["atr"] = atr
     tech["atr_pct"] = _safe((atr / current * 100)) if atr and current else None
 
-    signal, score, confidence = _signal_from_indicators(tech)
-    tech["signal"] = signal
-    tech["score"] = score
-    tech["confidence"] = confidence
+    raw_score, agreement = _raw_signal_score(tech)
+    tech["raw_score"] = raw_score
+    tech["agreement"] = agreement
+
+    # Provisional stabilized values with NO history (prior_rows=[]). Callers that
+    # have access to stored history (single-stock analysis, daily digest) will
+    # re-stabilize with the real history and overwrite these.
+    from backend.services.signal_stabilizer import stabilize
+    prov = stabilize([], {"tech": raw_score, "st": None, "lt": None}, {"tech": agreement})
+    tech["score"] = prov["tech_smoothed"]
+    tech["signal"] = prov["tech_signal"]
+    tech["confidence"] = prov["tech_confidence"]
 
     return {"technical": tech}
 
@@ -1204,6 +1181,60 @@ def _detect_patterns(ticker: str) -> list[dict]:
     return patterns
 
 
+def _apply_stabilization(ticker: str, tech: dict, result: dict) -> None:
+    """
+    Smooth today's raw tech/ST/LT scores against stored history, derive
+    hysteresis-gated signals + honest confidence, write the values back into
+    `tech`/`result`, and persist today's row.
+
+    All DB access is wrapped defensively: if history is unavailable the caller
+    still gets the provisional (stateless) values already sitting in `tech`.
+    """
+    try:
+        from datetime import date
+        from backend.services.signal_stabilizer import stabilize
+        import database as db
+
+        st = result.get("st_analysis") or {}
+        lt = result.get("lt_analysis") or {}
+        raw_scores = {
+            "tech": tech.get("raw_score_adj", tech.get("raw_score", 50.0)),
+            "st": st.get("score"),
+            "lt": lt.get("score"),
+        }
+        agreements = {"tech": tech.get("agreement", 0.5)}
+
+        try:
+            prior_rows = db.get_recent_signal_history(ticker, lookback_days=10)
+        except Exception:
+            prior_rows = []
+
+        row = stabilize(prior_rows, raw_scores, agreements)
+
+        # Write stabilized tech values back (score shown = smoothed score).
+        tech["score"] = row["tech_smoothed"]
+        tech["signal"] = row["tech_signal"]
+        tech["confidence"] = row["tech_confidence"]
+        tech["signal_changed"] = row.get("tech_changed", False)
+
+        # Overlay smoothed ST/LT signals + scores so the ranking is stable too.
+        if result.get("st_analysis") and row.get("st_smoothed") is not None:
+            result["st_analysis"]["score"] = row["st_smoothed"]
+            result["st_analysis"]["signal"] = row["st_signal"]
+            result["st_analysis"]["signal_changed"] = row.get("st_changed", False)
+        if result.get("lt_analysis") and row.get("lt_smoothed") is not None:
+            result["lt_analysis"]["score"] = row["lt_smoothed"]
+            result["lt_analysis"]["signal"] = row["lt_signal"]
+            result["lt_analysis"]["signal_changed"] = row.get("lt_changed", False)
+
+        try:
+            db.upsert_signal_history(ticker, date.today(), row)
+        except Exception as exc:
+            logger.warning("signal_history upsert failed for %s: %s", ticker, exc)
+    except Exception as exc:
+        logger.warning("Stabilization skipped for %s: %s", ticker, exc)
+
+
 def analyze_stock_sync(
     ticker: str,
     mode: str,
@@ -1256,21 +1287,25 @@ def analyze_stock_sync(
                 if ct.get(field) is not None:
                     tech[field] = ct[field]
 
-    # ── Market regime — fetch once, apply multiplier to score ─────────────────
+    # ── Market regime — fold into the RAW score as a small additive tilt ──────
+    # (The old code multiplied the whole score and re-derived the signal every
+    # day, so a daily VIX move could flip the call. Now regime nudges the raw
+    # score by at most a few points and the tilt is then absorbed by smoothing.)
     regime: dict | None = None
+    regime_tilt = 0.0
     try:
         from backend.services.regime_detector import get_market_regime
         regime = get_market_regime()
         multiplier = float(regime.get("score_multiplier", 1.0))
-        raw_score  = tech.get("score", 50)
-        tech["raw_score"]         = raw_score
+        regime_tilt = round(min(max((multiplier - 1.0) * 40.0, -6.0), 6.0), 2)
         tech["regime_multiplier"] = multiplier
-        tech["score"]             = round(min(max(raw_score * multiplier, 0), 100), 1)
-        # Re-derive signal from adjusted score
-        adj = tech["score"]
-        tech["signal"] = "buy" if adj >= 65 else "watch" if adj >= 52 else "hold" if adj >= 38 else "sell"
+        tech["regime_tilt"] = regime_tilt
     except Exception:
         pass
+
+    # Regime-adjusted raw score fed to the stabilizer (final signal derived later,
+    # once ST/LT scores are known, so the whole day is persisted in one row).
+    tech["raw_score_adj"] = round(min(max(tech.get("raw_score", 50.0) + regime_tilt, 0), 100), 1)
 
     result["technical"] = tech
     result["regime"]    = regime
@@ -1364,6 +1399,11 @@ def analyze_stock_sync(
             result["lt_analysis"] = None
     else:
         result["lt_analysis"] = None
+
+    # ── Stabilize tech/ST/LT against stored history, then persist today ───────
+    # Smoothing + hysteresis live here so the signal only moves on a sustained
+    # trend, and confidence reflects real conviction — not a near-boundary flip.
+    _apply_stabilization(ticker, tech, result)
 
     if mode == "api":
         fund_for_ai    = result.get("fundamentals") or {}

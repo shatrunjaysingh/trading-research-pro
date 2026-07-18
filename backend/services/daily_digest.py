@@ -23,8 +23,17 @@ SP100 = [
 ]
 
 
-def _score_ticker_for_digest(ticker: str, spy_returns: dict) -> dict | None:
-    """Score a single ticker. Returns None on failure."""
+def _score_ticker_for_digest(
+    ticker: str, spy_returns: dict, prior_rows: list[dict] | None = None
+) -> dict | None:
+    """Score a single ticker. Returns None on failure.
+
+    `prior_rows` is this ticker's stored signal history (most-recent-first),
+    pre-fetched in the main thread so workers never touch the DB. The raw ST/LT
+    scores are smoothed + hysteresis-gated against that history so the digest's
+    picks stop churning day to day. The stabilized row is returned under
+    `_signal_row` for the caller to persist in one batch.
+    """
     try:
         import yfinance as yf
         from backend.services.rs_rating import compute_rs_rating
@@ -32,6 +41,7 @@ def _score_ticker_for_digest(ticker: str, spy_returns: dict) -> dict | None:
             _fetch_stock_data, _compute_weekly_confirmation,
             _compute_st_score, _compute_lt_score, _fetch_fundamentals,
         )
+        from backend.services.signal_stabilizer import stabilize
 
         # Technical (3m daily — same as main scorer)
         tech_result = _fetch_stock_data(
@@ -62,18 +72,31 @@ def _score_ticker_for_digest(ticker: str, spy_returns: dict) -> dict | None:
 
         company = (fund or {}).get("company_name") or ticker
 
+        # Stabilize raw ST/LT scores against stored history (pure, no DB here).
+        row = stabilize(
+            prior_rows or [],
+            {"tech": tech.get("raw_score", 50.0), "st": st["score"],
+             "lt": lt["score"] if lt else None},
+            {"tech": tech.get("agreement", 0.5)},
+        )
+        st_score = row["st_smoothed"] if row.get("st_smoothed") is not None else st["score"]
+        st_signal = row["st_signal"] or st["signal"]
+        lt_score = row.get("lt_smoothed") if lt else None
+        lt_signal = row.get("lt_signal") if lt else None
+
         return {
             "ticker":        ticker,
             "company":       company,
             "price":         price,
             "day_change_pct": tech.get("day_change_pct"),
             "rs_score":      rs_score,
-            "st_score":      st["score"],
-            "st_signal":     st["signal"],
+            "st_score":      st_score,
+            "st_signal":     st_signal,
             "st_reasoning":  st["reasoning"],
-            "lt_score":      lt["score"]  if lt else None,
-            "lt_signal":     lt["signal"] if lt else None,
+            "lt_score":      lt_score if lt else None,
+            "lt_signal":     lt_signal if lt else None,
             "lt_reasoning":  lt["reasoning"] if lt else [],
+            "_signal_row":   {"ticker": ticker, **row},
         }
     except Exception as exc:
         logger.debug("Digest scoring failed for %s: %s", ticker, exc)
@@ -116,16 +139,37 @@ def run_daily_digest(force: bool = False) -> dict:
         universe = list(set(SP100 + watchlist_tickers))
         logger.info("Screening %d tickers…", len(universe))
 
+        # Pre-fetch signal history for the whole universe in ONE query (main
+        # thread) so worker threads never hit the DB pool during scoring.
+        try:
+            history_map = db.get_recent_signal_history_bulk(universe, lookback_days=10)
+        except Exception as exc:
+            logger.warning("Signal history prefetch failed: %s", exc)
+            history_map = {}
+
         # Score all tickers in parallel (max 20 workers)
         scored: list[dict] = []
         with ThreadPoolExecutor(max_workers=20) as ex:
-            futures = {ex.submit(_score_ticker_for_digest, t, spy_returns): t for t in universe}
+            futures = {
+                ex.submit(_score_ticker_for_digest, t, spy_returns, history_map.get(t.upper()))
+                : t for t in universe
+            }
             for f in as_completed(futures):
                 result = f.result()
                 if result:
                     scored.append(result)
 
         logger.info("Scored %d/%d tickers successfully", len(scored), len(universe))
+
+        # Persist today's stabilized signal rows in one batch (main thread).
+        try:
+            today_rows = [s["_signal_row"] for s in scored if s.get("_signal_row")]
+            if today_rows:
+                db.upsert_signal_history_bulk(
+                    [{"as_of": today, **r} for r in today_rows]
+                )
+        except Exception as exc:
+            logger.warning("Signal history bulk upsert failed: %s", exc)
 
         # Top 5 short-term: high ST score + RS > 65 + positive day change preferred
         st_eligible = [

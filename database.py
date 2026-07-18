@@ -353,6 +353,29 @@ _SCHEMA_STATEMENTS = [
         added_at   TIMESTAMPTZ DEFAULT NOW()
     )
     """,
+    # Per-ticker daily signal history — powers score smoothing + hysteresis so
+    # signals stay stable day-to-day instead of flip-flopping. One row per
+    # ticker per day; the stabilizer reads recent rows and writes today's.
+    """
+    CREATE TABLE IF NOT EXISTS signal_history (
+        id              SERIAL PRIMARY KEY,
+        ticker          TEXT  NOT NULL,
+        as_of           DATE  NOT NULL,
+        tech_raw        NUMERIC(6,2),
+        tech_smoothed   NUMERIC(6,2),
+        tech_signal     TEXT,
+        tech_confidence NUMERIC(6,2),
+        st_raw          NUMERIC(6,2),
+        st_smoothed     NUMERIC(6,2),
+        st_signal       TEXT,
+        lt_raw          NUMERIC(6,2),
+        lt_smoothed     NUMERIC(6,2),
+        lt_signal       TEXT,
+        created_at      TIMESTAMPTZ DEFAULT NOW(),
+        UNIQUE(ticker, as_of)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_signal_hist_ticker ON signal_history(ticker, as_of DESC)",
 ]
 
 
@@ -1470,6 +1493,101 @@ def log_digest_run(run_date, st_count: int, lt_count: int, users_sent: int) -> N
                SET st_count=EXCLUDED.st_count, lt_count=EXCLUDED.lt_count,
                    users_sent=EXCLUDED.users_sent, created_at=NOW()""",
             (run_date, st_count, lt_count, users_sent),
+        )
+
+
+# ---------------------------------------------------------------------------
+# Signal history — day-over-day score smoothing + hysteresis
+# ---------------------------------------------------------------------------
+
+_SIGNAL_HIST_COLS = (
+    "tech_raw", "tech_smoothed", "tech_signal", "tech_confidence",
+    "st_raw", "st_smoothed", "st_signal",
+    "lt_raw", "lt_smoothed", "lt_signal",
+)
+
+
+def _signal_select_cols() -> str:
+    """Cast numeric columns to float so callers get plain numbers, not Decimal."""
+    parts = [
+        c if c.endswith("_signal") else f"{c}::float"
+        for c in _SIGNAL_HIST_COLS
+    ]
+    return ", ".join(parts)
+
+
+def get_recent_signal_history(ticker: str, lookback_days: int = 10) -> list[dict]:
+    """Recent stored signal rows for one ticker, most-recent-first."""
+    with get_db() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                f"""SELECT as_of, {_signal_select_cols()}
+                    FROM signal_history
+                    WHERE ticker = %s
+                    ORDER BY as_of DESC
+                    LIMIT %s""",
+                (ticker.upper(), lookback_days),
+            )
+            return [dict(r) for r in cur.fetchall()]
+
+
+def get_recent_signal_history_bulk(
+    tickers: list[str], lookback_days: int = 10
+) -> dict[str, list[dict]]:
+    """
+    Recent signal rows for many tickers in a single query. Returns
+    {ticker: [rows most-recent-first]}. Used by the daily digest so worker
+    threads never touch the DB (avoids exhausting the connection pool).
+    """
+    if not tickers:
+        return {}
+    uppers = [t.upper() for t in tickers]
+    out: dict[str, list[dict]] = {t: [] for t in uppers}
+    with get_db() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                f"""SELECT ticker, as_of, {_signal_select_cols()}
+                    FROM (
+                        SELECT *, ROW_NUMBER() OVER (
+                                   PARTITION BY ticker ORDER BY as_of DESC) AS rn
+                        FROM signal_history
+                        WHERE ticker = ANY(%s)
+                    ) s
+                    WHERE rn <= %s
+                    ORDER BY ticker, as_of DESC""",
+                (uppers, lookback_days),
+            )
+            for r in cur.fetchall():
+                out.setdefault(r["ticker"], []).append(dict(r))
+    return out
+
+
+def upsert_signal_history(ticker: str, as_of, row: dict) -> None:
+    """Insert or update one ticker's signal row for a given day."""
+    upsert_signal_history_bulk([{"ticker": ticker.upper(), "as_of": as_of, **row}])
+
+
+def upsert_signal_history_bulk(rows: list[dict]) -> None:
+    """
+    Insert/update many signal rows in one round-trip. Each row must carry
+    'ticker', 'as_of', and any of the _SIGNAL_HIST_COLS keys.
+    """
+    if not rows:
+        return
+    cols = ["ticker", "as_of", *_SIGNAL_HIST_COLS]
+    placeholders = "(" + ", ".join(["%s"] * len(cols)) + ")"
+    values = [tuple(r.get("ticker") if c == "ticker" else r.get(c) for c in cols) for r in rows]
+    updates = ", ".join(f"{c}=EXCLUDED.{c}" for c in _SIGNAL_HIST_COLS)
+    with get_db() as conn:
+        cur = conn.cursor()
+        psycopg2.extras.execute_values(
+            cur,
+            f"""INSERT INTO signal_history ({', '.join(cols)})
+                VALUES %s
+                ON CONFLICT (ticker, as_of) DO UPDATE
+                SET {updates}, created_at = NOW()""",
+            values,
+            template=placeholders,
         )
 
 
