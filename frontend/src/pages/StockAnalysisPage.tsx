@@ -1381,6 +1381,27 @@ function FinancialHealthStrip({ h, inline = false }: { h: FinancialHealth | null
 
 // ── Decision Summary (consolidated hero) ──────────────────────────────────────
 
+// Plain-English explanations shown via (i) tooltips on the rating.
+const COMPOSITE_INFO = 'A single 0–100 rating blending six factors — momentum, quality, value, growth, analyst revisions and low-volatility. 65+ leans Buy, 52–64 Watch, 38–51 Hold, under 38 Sell.'
+const CONVICTION_INFO = 'How much to trust the rating — NOT how bullish it is. High only when the six factors agree and the score sits clearly inside a band. Low means the signals conflict, so treat the rating with caution.'
+const FACTOR_INFO = "Each bar is this stock's percentile rank on that factor (0–100). Green ≥70 = strong (top tier), blue 50–69 = above average, yellow 30–49 = below average, red under 30 = weak (bottom tier)."
+
+// Financial-distress detection from the health metrics. Returns human-readable
+// reasons; a non-empty list surfaces the ⚠️ warning on the rating.
+function distressReasons(h: FinancialHealth | null | undefined): string[] {
+  if (!h) return []
+  const out: string[] = []
+  if (h.altman_z != null && h.altman_z < 1.8)
+    out.push(`Altman-Z ${h.altman_z.toFixed(1)} (distress zone, < 1.8)`)
+  if (h.piotroski != null && h.piotroski <= 2)
+    out.push(`Piotroski ${h.piotroski}/9 (weak fundamentals)`)
+  if (h.roic != null && h.roic < 0)
+    out.push(`ROIC ${(h.roic * 100).toFixed(0)}% (destroying capital)`)
+  if (h.fcf_yield != null && h.fcf_yield < 0)
+    out.push(`FCF yield ${(h.fcf_yield * 100).toFixed(1)}% (burning cash)`)
+  return out
+}
+
 // Shared signal derivation used by the rating hero and analysis panel.
 function deriveDecision(result: StockAnalysisResult) {
   const tech = result.technical
@@ -1399,6 +1420,7 @@ function DecisionSummary({ result, onRefresh, currency = '$' }: { result: StockA
   const tech = result.technical
   const fa   = result.factor_analysis
   const { composite, conviction, signal } = deriveDecision(result)
+  const distress = distressReasons(result.financial_health)
 
   const pill: Record<string, string> = {
     buy: 'bg-green-600 text-white', watch: 'bg-blue-600 text-white',
@@ -1452,16 +1474,28 @@ function DecisionSummary({ result, onRefresh, currency = '$' }: { result: StockA
         <div className="flex items-center gap-5 shrink-0">
           <div className="text-center">
             <div className="text-4xl font-black text-ink leading-none">{composite.toFixed(0)}</div>
-            <div className="text-[10px] text-ink-faint uppercase tracking-wide mt-1">Rating /100</div>
+            <div className="flex items-center justify-center gap-1 text-[10px] text-ink-faint uppercase tracking-wide mt-1">
+              Rating /100 <InfoTooltip text={COMPOSITE_INFO} align="right" />
+            </div>
           </div>
           <div className="text-center">
             <span className={clsx('inline-block px-4 py-2 rounded-xl text-lg font-black uppercase tracking-wider', pill[signal])}>
               {SIGNAL_LABEL[signal]}
             </span>
-            <div className="text-[11px] text-ink-muted mt-1">{conviction.toFixed(0)}% · {convLabel}</div>
+            <div className="flex items-center justify-center gap-1 text-[11px] text-ink-muted mt-1">
+              {conviction.toFixed(0)}% · {convLabel} <InfoTooltip text={CONVICTION_INFO} align="right" />
+            </div>
           </div>
         </div>
       </div>
+
+      {/* Financial-distress warning — shown when Altman-Z / Piotroski etc. flag risk */}
+      {distress.length > 0 && (
+        <div className="mt-3 flex items-start gap-2 rounded-lg bg-red-50 dark:bg-red-900/20 border border-red-300 dark:border-red-700 px-3 py-2 text-xs text-red-700 dark:text-red-300">
+          <span className="mt-0.5">⚠️</span>
+          <span><strong>Financial distress signals:</strong> {distress.join(' · ')}. Momentum may be a speculative bounce — the deeper factors are flashing caution.</span>
+        </div>
+      )}
 
       {takeaway && <p className="text-xs text-ink-muted mt-3 pt-3 border-t border-black/5 dark:border-white/10">{takeaway}</p>}
     </div>
@@ -1483,10 +1517,25 @@ function AnalysisDetail({ result }: { result: StockAnalysisResult }) {
       {fa?.families && (
         <div>
           <div className="flex items-center justify-between mb-2">
-            <span className="text-xs font-semibold text-ink">Factor breakdown</span>
+            <span className="flex items-center gap-1 text-xs font-semibold text-ink">
+              Factor breakdown <InfoTooltip text={FACTOR_INFO} align="left" />
+            </span>
             <span className="text-[10px] text-ink-faint">
               {fa.basis === 'cross-sectional' ? `percentile vs ${fa.universe_n ?? '—'} peers` : 'baseline ranking'}
             </span>
+          </div>
+          {/* Colour legend */}
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mb-2 text-[10px] text-ink-faint">
+            {[
+              { c: 'bg-green-500', t: '≥70 strong' },
+              { c: 'bg-blue-500', t: '50–69 above avg' },
+              { c: 'bg-yellow-500', t: '30–49 below avg' },
+              { c: 'bg-red-500', t: '<30 weak' },
+            ].map(({ c, t }) => (
+              <span key={t} className="flex items-center gap-1">
+                <span className={clsx('w-2.5 h-2.5 rounded-full', c)} />{t}
+              </span>
+            ))}
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-2">
             {FACTOR_META.map(({ key, label, desc }) => {
