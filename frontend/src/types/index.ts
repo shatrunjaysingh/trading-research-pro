@@ -485,7 +485,9 @@ export interface FactorFamily {
 export interface FactorAnalysis {
   families: Record<string, FactorFamily>
   composite: number
+  raw_composite?: number
   conviction: number
+  guardrail_caps?: string[]
   weights: Record<string, number>
   coverage: number
   universe_date: string | null

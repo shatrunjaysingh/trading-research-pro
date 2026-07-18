@@ -446,6 +446,8 @@ def _score_asset(asset: dict, spy_return_3m: float,
         roe_val        = _num(info.get("returnOnEquity"))
         margin_val     = _num(info.get("profitMargins"))
         de_val         = _num(info.get("debtToEquity"))
+        if de_val is not None and de_val > 5:   # yfinance reports D/E as a percentage
+            de_val = round(de_val / 100.0, 4)
         curr_ratio_val = _num(info.get("currentRatio"))
         fwd_pe_val     = _num(info.get("forwardPE"))
         beta_val       = _num(info.get("beta"))

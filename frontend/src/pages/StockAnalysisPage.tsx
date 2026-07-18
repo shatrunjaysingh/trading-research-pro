@@ -1471,6 +1471,12 @@ function DecisionSummary({ result, onRefresh, currency = '$' }: { result: StockA
       <div>
         <div className="flex items-center gap-1 text-[10px] text-ink-faint uppercase tracking-wide mb-1">
           Rating {composite.toFixed(0)}/100 <InfoTooltip text={COMPOSITE_INFO} align="left" />
+          {fa?.guardrail_caps && fa.guardrail_caps.length > 0 && (
+            <span className="normal-case tracking-normal text-red-500 font-semibold ml-1"
+              title={`Rating capped by risk guardrails (raw factor score ${fa.raw_composite?.toFixed(0) ?? '—'}): ${fa.guardrail_caps.join('; ')}`}>
+              · risk-capped from {fa.raw_composite?.toFixed(0)}
+            </span>
+          )}
         </div>
         <div className="relative h-2.5 rounded-full bg-gradient-to-r from-red-500 via-yellow-400 to-green-500">
           <div className="absolute -top-1 w-1 bg-ink rounded-full shadow" style={{ left: `calc(${markerPct}% - 2px)`, height: '1.15rem' }} />

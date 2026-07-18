@@ -35,6 +35,16 @@ def _safe(v: Any) -> float | None:
         return None
 
 
+def _norm_de(v: Any) -> float | None:
+    """yfinance reports debt/equity as a PERCENTAGE (e.g. 168 = 1.68x). Normalise
+    to a ratio so leverage thresholds (e.g. 'D/E > 2.0') and the factor engine's
+    anchors are correct rather than flagging every firm as over-levered."""
+    f = _safe(v)
+    if f is None:
+        return None
+    return round(f / 100.0, 4) if f > 5 else round(f, 4)
+
+
 def _compute_rsi(closes: list[float], period: int = 14) -> float | None:  # period is user-configurable
     if len(closes) < period + 1:
         return None
@@ -596,7 +606,7 @@ def _fetch_fundamentals(ticker: str) -> dict:
         "revenue":          _safe(info.get("totalRevenue")),
         "revenue_growth":   _safe(info.get("revenueGrowth")),
         "profit_margin":    _safe(info.get("profitMargins")),
-        "debt_to_equity":   _safe(info.get("debtToEquity")),
+        "debt_to_equity":   _norm_de(info.get("debtToEquity")),
         "current_ratio":    _safe(info.get("currentRatio")),
         "return_on_equity": _safe(info.get("returnOnEquity")),
         "dividend_yield":   _safe(info.get("dividendYield")),
@@ -868,7 +878,7 @@ def fetch_analyst_snapshot(ticker: str) -> dict:
         "eps":                 _safe(info.get("trailingEps")),
         "revenue":             _safe(info.get("totalRevenue")),
         "profit_margin":       _safe(info.get("profitMargins")),
-        "debt_to_equity":      _safe(info.get("debtToEquity")),
+        "debt_to_equity":      _norm_de(info.get("debtToEquity")),
         "current_ratio":       _safe(info.get("currentRatio")),
         "return_on_equity":    _safe(info.get("returnOnEquity")),
         "dividend_yield":      _safe(info.get("dividendYield")),

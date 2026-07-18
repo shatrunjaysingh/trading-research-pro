@@ -262,6 +262,31 @@ def analyze(
             num += w * fp
             den += w
     composite = round(num / den, 1) if den > 0 else 50.0
+    raw_composite = composite
+
+    # ── Hard risk guardrails ──────────────────────────────────────────────────
+    # A decision tool must never rate a financially distressed company as a
+    # Buy/Hold just because its momentum or growth screens well. These caps
+    # enforce the same discipline a real risk desk would: severe distress forces
+    # the rating into Sell/Avoid territory regardless of the factor blend.
+    caps: list[str] = []
+    cap_at = 100.0
+    alt   = data.get("altman_z")
+    pio   = data.get("piotroski")
+    fcf   = data.get("fcf_yield")
+    roicx = data.get("roic_excess")
+
+    if alt is not None and alt < 1.8:
+        cap_at = min(cap_at, 40.0); caps.append(f"Altman-Z {alt:.1f} (distress zone)")
+    if alt is not None and alt < 0:
+        cap_at = min(cap_at, 25.0)   # negative Z = severe bankruptcy risk
+    if pio is not None and pio <= 2:
+        cap_at = min(cap_at, 45.0); caps.append(f"Piotroski {int(pio)}/9 (weak)")
+    if fcf is not None and roicx is not None and fcf < 0 and roicx < 0:
+        cap_at = min(cap_at, 32.0); caps.append("burning cash & destroying capital")
+
+    if cap_at < composite:
+        composite = round(cap_at, 1)
 
     # Conviction = breadth of agreement. How many families lean the SAME way as
     # the composite, weighted by how far each leans from neutral (50). A stock
@@ -280,11 +305,17 @@ def analyze(
     breadth = (agree_w / lean_sum) if lean_sum > 0 else 0.5      # 0..1 agreement
     magnitude = min(abs(composite - 50.0) / 30.0, 1.0)            # 0..1 conviction
     conviction = round(100.0 * (0.6 * breadth + 0.4 * magnitude), 0)
+    # A distress cap is high-confidence bearish evidence — don't report it as a
+    # wishy-washy low-conviction call.
+    if caps:
+        conviction = max(conviction, 65.0)
 
     return {
         "families": families,
         "composite": composite,
+        "raw_composite": raw_composite,
         "conviction": conviction,
+        "guardrail_caps": caps,
         "weights": {k: round(v, 4) for k, v in weights.items()},
         "coverage": round(covered_metrics / total_metrics, 2) if total_metrics else 0.0,
     }
