@@ -12,7 +12,7 @@ import {
   apiGetPortfolioNews,
   HoldingInput,
 } from '../api/portfolio'
-import { PortfolioResult, PortfolioHolding, ScoredHolding, PortfolioAction, BacktestResult, BenchmarkResult, TickerNews } from '../types'
+import { PortfolioResult, PortfolioHolding, ScoredHolding, PortfolioAction, BacktestResult, BenchmarkResult, TickerNews, PortfolioRisk } from '../types'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -232,6 +232,91 @@ function ScoredHoldingRow({ h }: { h: ScoredHolding }) {
 }
 
 // ── Position Sizer ────────────────────────────────────────────────────────────
+
+function PortfolioRiskCard({ risk }: { risk: PortfolioRisk | null | undefined }) {
+  if (!risk) return null
+
+  const stat = (label: string, value: string, sub?: string, tone?: 'good' | 'ok' | 'bad') => {
+    const toneCls = tone === 'good' ? 'text-green-600 dark:text-green-400'
+      : tone === 'bad' ? 'text-red-600 dark:text-red-400'
+      : tone === 'ok' ? 'text-amber-600 dark:text-amber-400' : 'text-ink'
+    return (
+      <div className="flex flex-col">
+        <span className="text-[10px] text-ink-faint uppercase tracking-wider">{label}</span>
+        <span className={clsx('text-lg font-bold', toneCls)}>{value}</span>
+        {sub && <span className="text-[10px] text-ink-faint">{sub}</span>}
+      </div>
+    )
+  }
+
+  const betaTone = risk.portfolio_beta > 1.3 ? 'bad' : risk.portfolio_beta > 1.1 ? 'ok' : 'good'
+
+  return (
+    <div className="bg-surface rounded-2xl border border-surface-border shadow-card p-5 space-y-4">
+      <div className="flex items-center justify-between">
+        <span className="font-semibold text-ink text-sm">Portfolio Risk</span>
+        <span className="text-[10px] text-ink-faint">{risk.risk_available ? '6-month daily returns' : 'limited data'}</span>
+      </div>
+
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+        {stat('Beta', risk.portfolio_beta.toFixed(2), 'vs market', betaTone)}
+        {risk.portfolio_ann_vol_pct != null &&
+          stat('Volatility', `${risk.portfolio_ann_vol_pct}%`, 'annualized')}
+        {risk.diversification_ratio != null &&
+          stat('Diversification', `${risk.diversification_ratio}×`,
+            risk.diversification_ratio >= 1.3 ? 'well spread' : 'concentrated',
+            risk.diversification_ratio >= 1.3 ? 'good' : 'ok')}
+        {risk.est_var_95_1y_pct != null &&
+          stat('1Y Downside', `-${risk.est_var_95_1y_pct}%`, '95% VaR',
+            risk.est_var_95_1y_pct > 30 ? 'bad' : risk.est_var_95_1y_pct > 20 ? 'ok' : 'good')}
+      </div>
+
+      {/* Concentration flags */}
+      {risk.sector_flags.length > 0 && (
+        <div className="text-xs text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/20 rounded-lg px-3 py-2">
+          ⚠️ Concentrated: {risk.sector_flags.map(f => `${f.sector} ${f.weight}%`).join(', ')}
+        </div>
+      )}
+
+      {/* Redundant (highly-correlated) pairs */}
+      {risk.redundant_pairs && risk.redundant_pairs.length > 0 && (
+        <div>
+          <div className="text-[10px] text-ink-faint uppercase tracking-wider mb-1">Redundant risk (highly correlated)</div>
+          <div className="flex flex-wrap gap-2">
+            {risk.redundant_pairs.map((p, i) => (
+              <span key={i} className="text-xs px-2 py-1 rounded-lg bg-surface-muted text-ink-muted"
+                title={`${p.a} & ${p.b} move together (corr ${p.corr}) — effectively one bet at ${p.combined_weight}% of the book`}>
+                {p.a}↔{p.b} · {p.corr}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Rebalancing suggestions (conviction × volatility targeted) */}
+      {risk.target_weights && risk.target_weights.length > 0 && (
+        <div>
+          <div className="text-[10px] text-ink-faint uppercase tracking-wider mb-1">
+            Suggested rebalance (conviction ÷ volatility)
+          </div>
+          <div className="space-y-1">
+            {risk.target_weights.filter(t => Math.abs(t.delta_pct) >= 3).slice(0, 4).map(t => (
+              <div key={t.ticker} className="flex items-center justify-between text-xs">
+                <span className="font-semibold text-ink">{t.ticker}</span>
+                <span className="text-ink-muted">
+                  {t.current_pct}% → {t.target_pct}%
+                  <span className={clsx('ml-2 font-bold', t.delta_pct > 0 ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400')}>
+                    {t.delta_pct > 0 ? '+' : ''}{t.delta_pct}%
+                  </span>
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
 
 function PositionSizerPanel({ portfolioValue }: { portfolioValue: number }) {
   const [pv, setPv] = useState(portfolioValue > 0 ? portfolioValue.toFixed(0) : '100000')
@@ -703,6 +788,9 @@ export function PortfolioPage() {
                   </div>
                   <div className="text-sm text-ink">{rv.summary.top_recommendation}</div>
                 </div>
+
+                {/* Portfolio-level risk analytics */}
+                <PortfolioRiskCard risk={rv.risk} />
 
                 {/* Holdings review table */}
                 <div className="bg-surface rounded-2xl border border-surface-border shadow-card overflow-hidden">

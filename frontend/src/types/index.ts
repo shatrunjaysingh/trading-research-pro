@@ -623,9 +623,26 @@ export interface PortfolioReviewSummary {
   num_holdings: number
 }
 
+export interface PortfolioRisk {
+  portfolio_beta: number
+  sector_weights: Record<string, number>
+  sector_hhi: number
+  sector_flags: { sector: string; weight: number }[]
+  n_holdings: number
+  risk_available: boolean
+  portfolio_ann_vol_pct?: number
+  weighted_avg_ann_vol_pct?: number
+  diversification_ratio?: number | null
+  redundant_pairs?: { a: string; b: string; corr: number; combined_weight: number }[]
+  est_var_95_1y_pct?: number
+  asset_ann_vol_pct?: Record<string, number>
+  target_weights?: { ticker: string; current_pct: number; target_pct: number; delta_pct: number }[]
+}
+
 export interface PortfolioReview {
   holdings: ScoredHolding[]
   summary: PortfolioReviewSummary
+  risk?: PortfolioRisk | null
   error?: string
 }
 

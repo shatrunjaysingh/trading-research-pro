@@ -288,6 +288,14 @@ def analyze_saved_portfolio(user_id: int) -> dict:
     total_pnl  = sum(h["pnl"] for h in scored)
     total_pnl_pct = round(total_pnl / total_cost * 100, 2) if total_cost else None
 
+    # ── Portfolio-level risk analytics (beta, concentration, correlation, VaR) ──
+    risk = None
+    try:
+        from backend.services.portfolio_risk import analyze_portfolio_risk
+        risk = analyze_portfolio_risk(scored)
+    except Exception as exc:
+        logger.warning("Portfolio risk analysis failed: %s", exc)
+
     return {
         "holdings": scored + errors,
         "summary": {
@@ -300,4 +308,5 @@ def analyze_saved_portfolio(user_id: int) -> dict:
             "action_counts":  action_counts,
             "num_holdings":   len(scored),
         },
+        "risk": risk,
     }
