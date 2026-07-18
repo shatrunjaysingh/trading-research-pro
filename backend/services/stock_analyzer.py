@@ -1454,9 +1454,25 @@ def analyze_stock_sync(
         fa["universe_n"] = (uni or {}).get("n_stocks")
         fa["basis"] = "cross-sectional" if uni else "static-anchors"
         result["factor_analysis"] = fa
+
+        # ── Valuation (fair value, expected return) + actionable trade plan ────
+        try:
+            from backend.services import valuation as val
+            q_pct = (fa.get("families", {}).get("quality") or {}).get("percentile")
+            valn = val.estimate(data, quality_pct=q_pct)
+            result["valuation"] = valn
+            comp = fa.get("composite", 50)
+            sig = "buy" if comp >= 65 else "watch" if comp >= 52 else "hold" if comp >= 38 else "sell"
+            result["trade_plan"] = val.build_trade_plan(data, valn, fa.get("conviction"), sig)
+        except Exception as exc:
+            logger.warning("Valuation/trade plan failed for %s: %s", ticker, exc)
+            result["valuation"] = None
+            result["trade_plan"] = None
     except Exception as exc:
         logger.warning("Factor analysis failed for %s: %s", ticker, exc)
         result["factor_analysis"] = None
+        result["valuation"] = None
+        result["trade_plan"] = None
 
     if mode == "api":
         fund_for_ai    = result.get("fundamentals") or {}

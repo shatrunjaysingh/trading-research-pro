@@ -14,7 +14,7 @@ import {
   StockAnalysisResult, TechnicalSnapshot, FundamentalSnapshot,
   AnalystSnapshot, IndicatorKey, StockAnalysisRequest,
   SecInsiderTransaction, SecInsiderSummary, SecRecentFiling,
-  TechnicalPattern, RSRating, HorizonAnalysis, FactorAnalysis, FinancialHealth,
+  TechnicalPattern, RSRating, HorizonAnalysis, FactorAnalysis, FinancialHealth, Valuation, TradePlan,
 } from '../types'
 import { clsx } from 'clsx'
 import { InfoTooltip } from '../components/ui/InfoTooltip'
@@ -1583,6 +1583,114 @@ function AnalysisDetail({ result }: { result: StockAnalysisResult }) {
   )
 }
 
+// ── Valuation & Trade Plan ────────────────────────────────────────────────────
+
+const VAL_VERDICT_STYLE: Record<string, string> = {
+  'undervalued': 'text-green-700 dark:text-green-400 bg-green-100 dark:bg-green-900/30',
+  'modestly undervalued': 'text-green-600 dark:text-green-400 bg-green-50 dark:bg-green-900/20',
+  'roughly fair': 'text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-900/20',
+  'overvalued': 'text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20',
+}
+
+function ValuationTradePanel({ valuation, plan, currency = '$' }: { valuation: Valuation | null | undefined; plan: TradePlan | null | undefined; currency?: string }) {
+  if (!valuation && !plan) return null
+  const money = (v: number) => `${currency}${v.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+
+  // Position of current price within the fair-value range → a value gauge.
+  let markerPct = 50
+  if (valuation) {
+    const { fv_low, fv_high, current_price } = valuation
+    markerPct = fv_high > fv_low ? Math.max(2, Math.min(98, (current_price - fv_low) / (fv_high - fv_low) * 100)) : 50
+  }
+
+  return (
+    <div className="bg-surface rounded-xl border border-surface-border p-5 space-y-5">
+      <div className="text-sm font-semibold text-ink">Valuation & Trade Plan</div>
+
+      {valuation && (
+        <div className="space-y-3">
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <div className="flex items-baseline gap-2">
+              <span className="text-xs text-ink-faint uppercase tracking-wide">Fair value</span>
+              <span className="text-xl font-black text-ink">{money(valuation.fair_value)}</span>
+              <span className="text-xs text-ink-faint">({money(valuation.fv_low)} – {money(valuation.fv_high)})</span>
+            </div>
+            <span className={clsx('text-xs font-bold px-2.5 py-1 rounded-full capitalize', VAL_VERDICT_STYLE[valuation.verdict] ?? 'bg-surface-muted text-ink-muted')}>
+              {valuation.verdict}
+            </span>
+          </div>
+
+          {/* Value gauge: where price sits in the fair-value range */}
+          <div>
+            <div className="relative h-2.5 rounded-full bg-gradient-to-r from-green-500 via-yellow-400 to-red-500">
+              <div className="absolute -top-1 w-1 bg-ink rounded-full shadow" style={{ left: `calc(${markerPct}% - 2px)`, height: '1.15rem' }} />
+            </div>
+            <div className="flex justify-between text-[9px] text-ink-faint mt-1">
+              <span>Cheap {money(valuation.fv_low)}</span>
+              <span>Price {money(valuation.current_price)}</span>
+              <span>Rich {money(valuation.fv_high)}</span>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            {[
+              { label: 'Upside to fair', value: `${valuation.upside_pct >= 0 ? '+' : ''}${valuation.upside_pct}%`, tone: valuation.upside_pct >= 0 ? 'good' : 'bad' },
+              { label: 'Margin of safety', value: valuation.margin_of_safety_pct != null ? `${valuation.margin_of_safety_pct}%` : '—', tone: (valuation.margin_of_safety_pct ?? 0) >= 10 ? 'good' : (valuation.margin_of_safety_pct ?? 0) >= 0 ? 'ok' : 'bad' },
+              { label: 'Bull case', value: `+${valuation.bull_pct}%`, tone: 'good' },
+              { label: 'Bear case', value: `${valuation.bear_pct}%`, tone: 'bad' },
+            ].map(({ label, value, tone }) => (
+              <div key={label} className="bg-surface-muted rounded-lg p-2.5">
+                <div className="text-[10px] text-ink-faint">{label}</div>
+                <div className={clsx('text-sm font-bold', tone === 'good' ? 'text-green-600 dark:text-green-400' : tone === 'bad' ? 'text-red-500 dark:text-red-400' : 'text-amber-600 dark:text-amber-400')}>{value}</div>
+              </div>
+            ))}
+          </div>
+
+          {valuation.implied_growth_pct != null && valuation.eps_growth_pct != null && (
+            <p className="text-[11px] text-ink-faint">
+              Market is pricing in <strong className="text-ink-muted">~{valuation.implied_growth_pct}%</strong> earnings growth vs an estimated <strong className="text-ink-muted">{valuation.eps_growth_pct}%</strong>
+              {valuation.implied_growth_pct > valuation.eps_growth_pct + 3 ? ' — expectations look demanding.' : valuation.implied_growth_pct < valuation.eps_growth_pct - 3 ? ' — expectations look conservative.' : ' — roughly in line.'}
+              {' '}Fair value blends: {valuation.methods.join(' + ')}. Estimate, not advice.
+            </p>
+          )}
+        </div>
+      )}
+
+      {plan && (
+        <div className="border-t border-surface-border pt-4 space-y-3">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-semibold text-ink uppercase tracking-wide">Trade plan</span>
+            <span className={clsx('text-[10px] font-bold px-2 py-0.5 rounded-full', plan.actionable ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400' : 'bg-surface-muted text-ink-faint')}>
+              {plan.actionable ? 'Actionable setup' : 'Not actionable'}
+            </span>
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-center">
+            <div className="bg-surface-muted rounded-lg p-2.5">
+              <div className="text-[10px] text-ink-faint">Buy zone</div>
+              <div className="text-sm font-bold text-ink">{money(plan.entry_low)}–{money(plan.entry_high)}</div>
+            </div>
+            <div className="bg-red-50 dark:bg-red-900/20 rounded-lg p-2.5">
+              <div className="text-[10px] text-ink-faint">Stop</div>
+              <div className="text-sm font-bold text-red-600 dark:text-red-400">{money(plan.stop)} <span className="font-normal">({plan.stop_pct}%)</span></div>
+            </div>
+            <div className="bg-green-50 dark:bg-green-900/20 rounded-lg p-2.5">
+              <div className="text-[10px] text-ink-faint">Target</div>
+              <div className="text-sm font-bold text-green-600 dark:text-green-400">{money(plan.target)} <span className="font-normal">(+{plan.target_pct}%)</span></div>
+            </div>
+            <div className="bg-surface-muted rounded-lg p-2.5">
+              <div className="text-[10px] text-ink-faint">Reward : Risk</div>
+              <div className={clsx('text-sm font-bold', (plan.reward_risk ?? 0) >= 2 ? 'text-green-600 dark:text-green-400' : (plan.reward_risk ?? 0) >= 1.5 ? 'text-amber-600 dark:text-amber-400' : 'text-red-500')}>{plan.reward_risk != null ? `${plan.reward_risk} : 1` : '—'}</div>
+            </div>
+          </div>
+          <p className="text-[11px] text-ink-faint">
+            Suggested size <strong className="text-ink-muted">{plan.size_pct}%</strong> of a {money(plan.portfolio_value)} book ({plan.shares} sh), risking {plan.risk_per_trade_pct}% per trade, capped at {plan.max_position_pct}% per position{plan.size_capped ? ' (capped)' : ''}. Educational, not advice.
+          </p>
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ── Collapsible section wrapper (progressive disclosure) ──────────────────────
 
 function Section({ title, subtitle, children, defaultOpen = false }: { title: string; subtitle?: string; children: React.ReactNode; defaultOpen?: boolean }) {
@@ -2652,6 +2760,9 @@ export function StockAnalysisPage() {
 
             {/* Final decision rating — the one thing shown up top. */}
             <DecisionSummary result={result} onRefresh={() => handleRun(true)} currency={currency} />
+
+            {/* Valuation & trade plan — worth vs price + an actionable setup */}
+            <ValuationTradePanel valuation={result.valuation} plan={result.trade_plan} currency={currency} />
 
             {/* Analysis — factor breakdown, metrics & health (collapsed by default) */}
             {(result.factor_analysis || result.financial_health || result.rs_rating) && (

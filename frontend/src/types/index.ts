@@ -464,6 +464,42 @@ export interface StockAnalysisResult {
   lt_analysis?: HorizonAnalysis | null
   factor_analysis?: FactorAnalysis | null
   financial_health?: FinancialHealth | null
+  valuation?: Valuation | null
+  trade_plan?: TradePlan | null
+}
+
+export interface Valuation {
+  fair_value: number
+  fv_low: number
+  fv_high: number
+  current_price: number
+  upside_pct: number
+  bull_pct: number
+  bear_pct: number
+  margin_of_safety_pct: number | null
+  justified_pe: number
+  implied_growth_pct: number | null
+  eps_growth_pct: number | null
+  methods: string[]
+  verdict: string
+}
+
+export interface TradePlan {
+  entry_low: number
+  entry_high: number
+  stop: number
+  stop_pct: number
+  target: number
+  target_pct: number
+  reward_risk: number | null
+  shares: number
+  dollar_size: number
+  size_pct: number
+  size_capped: boolean
+  max_position_pct: number
+  portfolio_value: number
+  risk_per_trade_pct: number
+  actionable: boolean
 }
 
 export interface FinancialHealth {
