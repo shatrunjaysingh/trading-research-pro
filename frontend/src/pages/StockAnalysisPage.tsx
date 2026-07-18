@@ -1625,12 +1625,18 @@ function AnalysisDetail({ result }: { result: StockAnalysisResult }) {
 function Section({ title, subtitle, children, defaultOpen = false }: { title: string; subtitle?: string; children: React.ReactNode; defaultOpen?: boolean }) {
   return (
     <details open={defaultOpen} className="group">
-      <summary className="flex items-center gap-2 cursor-pointer select-none list-none px-1 py-1.5 text-xs font-bold uppercase tracking-widest text-ink-faint hover:text-ink">
-        <span className="text-[10px] transition-transform group-open:rotate-90">▶</span>
-        <span>{title}</span>
-        {subtitle && <span className="normal-case tracking-normal font-normal text-ink-faint/70">· {subtitle}</span>}
+      <summary className="flex items-center justify-between gap-2 cursor-pointer select-none list-none rounded-xl border border-surface-border bg-surface px-4 py-3 shadow-sm transition-colors hover:bg-surface-muted hover:border-primary/40 group-open:rounded-b-none group-open:border-b-0">
+        <div className="flex items-center gap-2.5 min-w-0">
+          <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary text-xs transition-transform group-open:rotate-90">▶</span>
+          <span className="text-sm font-semibold text-ink truncate">{title}</span>
+          {subtitle && <span className="hidden sm:inline text-xs text-ink-faint truncate">· {subtitle}</span>}
+        </div>
+        <span className="flex items-center gap-1 text-xs font-semibold text-primary shrink-0">
+          <span className="group-open:hidden">Show</span>
+          <span className="hidden group-open:inline">Hide</span>
+        </span>
       </summary>
-      <div className="mt-2 space-y-4">{children}</div>
+      <div className="space-y-4 rounded-b-xl border border-t-0 border-surface-border bg-surface/40 px-4 py-4">{children}</div>
     </details>
   )
 }
