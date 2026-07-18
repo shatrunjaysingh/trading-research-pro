@@ -1405,6 +1405,49 @@ def analyze_stock_sync(
     # trend, and confidence reflects real conviction — not a near-boundary flip.
     _apply_stabilization(ticker, tech, result)
 
+    # ── Institutional cross-sectional factor decomposition ────────────────────
+    # Rank this ticker's factor exposures (momentum/value/quality/growth/low-vol/
+    # revisions) against the latest universe distribution the digest recorded.
+    try:
+        from backend.services import factor_engine as fe
+        import database as db
+        try:
+            uni = db.get_latest_factor_universe_stats()
+        except Exception:
+            uni = None
+
+        # Financial-health signals (Piotroski, Altman-Z, ROIC, FCF) + analyst
+        # estimate-revision momentum — new institutional factors for the engine.
+        health: dict = {}
+        if include_fundamentals:
+            try:
+                from backend.services.financial_health import (
+                    get_financial_health, revision_score_from_ratings,
+                )
+                health = get_financial_health(ticker)
+                rev = revision_score_from_ratings((result.get("analyst") or {}).get("ratings"))
+                if rev is not None:
+                    health["revision_score"] = rev
+                result["financial_health"] = health
+            except Exception as exc:
+                logger.warning("financial_health failed for %s: %s", ticker, exc)
+                result["financial_health"] = None
+        else:
+            result["financial_health"] = None
+
+        data = fe.merge_factor_data(
+            tech, result.get("fundamentals"), result.get("analyst"), rs_score
+        )
+        data.update({k: v for k, v in (health or {}).items() if v is not None})
+        fa = fe.analyze(data, universe_stats=(uni or {}).get("stats"))
+        fa["universe_date"] = str(uni["as_of"]) if uni else None
+        fa["universe_n"] = (uni or {}).get("n_stocks")
+        fa["basis"] = "cross-sectional" if uni else "static-anchors"
+        result["factor_analysis"] = fa
+    except Exception as exc:
+        logger.warning("Factor analysis failed for %s: %s", ticker, exc)
+        result["factor_analysis"] = None
+
     if mode == "api":
         fund_for_ai    = result.get("fundamentals") or {}
         analyst_for_ai = result.get("analyst") or {}

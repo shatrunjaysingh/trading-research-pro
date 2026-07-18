@@ -376,6 +376,17 @@ _SCHEMA_STATEMENTS = [
     )
     """,
     "CREATE INDEX IF NOT EXISTS idx_signal_hist_ticker ON signal_history(ticker, as_of DESC)",
+    # Daily cross-sectional factor distribution over the screening universe.
+    # The digest writes one row/day (per-metric mean/std/n as JSONB); single-stock
+    # analysis ranks a ticker's raw exposures against the latest row.
+    """
+    CREATE TABLE IF NOT EXISTS factor_universe_stats (
+        as_of       DATE PRIMARY KEY,
+        stats       JSONB NOT NULL,
+        n_stocks    INTEGER,
+        created_at  TIMESTAMPTZ DEFAULT NOW()
+    )
+    """,
 ]
 
 
@@ -1589,6 +1600,37 @@ def upsert_signal_history_bulk(rows: list[dict]) -> None:
             values,
             template=placeholders,
         )
+
+
+def save_factor_universe_stats(as_of, stats: dict, n_stocks: int) -> None:
+    """Persist the day's cross-sectional factor distribution (upsert)."""
+    import json as _json
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """INSERT INTO factor_universe_stats (as_of, stats, n_stocks)
+               VALUES (%s, %s, %s)
+               ON CONFLICT (as_of) DO UPDATE
+               SET stats = EXCLUDED.stats, n_stocks = EXCLUDED.n_stocks,
+                   created_at = NOW()""",
+            (as_of, _json.dumps(stats), n_stocks),
+        )
+
+
+def get_latest_factor_universe_stats() -> dict | None:
+    """Most recent stored factor distribution, or None if none exists yet.
+
+    Returns {"as_of": date, "stats": {...}, "n_stocks": int}.
+    """
+    with get_db() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                """SELECT as_of, stats, n_stocks
+                   FROM factor_universe_stats
+                   ORDER BY as_of DESC LIMIT 1"""
+            )
+            row = cur.fetchone()
+            return dict(row) if row else None
 
 
 # ---------------------------------------------------------------------------

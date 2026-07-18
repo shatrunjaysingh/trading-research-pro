@@ -14,7 +14,7 @@ import {
   StockAnalysisResult, TechnicalSnapshot, FundamentalSnapshot,
   AnalystSnapshot, IndicatorKey, StockAnalysisRequest,
   SecInsiderTransaction, SecInsiderSummary, SecRecentFiling,
-  TechnicalPattern, RSRating, HorizonAnalysis,
+  TechnicalPattern, RSRating, HorizonAnalysis, FactorAnalysis, FinancialHealth,
 } from '../types'
 import { clsx } from 'clsx'
 import { InfoTooltip } from '../components/ui/InfoTooltip'
@@ -1232,6 +1232,150 @@ function HorizonPanel({ st, lt }: { st: HorizonAnalysis | null | undefined; lt: 
   )
 }
 
+// ── Factor Decomposition Panel (institutional cross-sectional ranking) ─────────
+
+const FACTOR_META: { key: string; label: string; desc: string }[] = [
+  { key: 'momentum',  label: 'Momentum',            desc: 'Trend & relative strength' },
+  { key: 'quality',   label: 'Quality',             desc: 'ROE, margins, low leverage' },
+  { key: 'value',     label: 'Value',               desc: 'Earnings / cash yield' },
+  { key: 'growth',    label: 'Growth',              desc: 'EPS & revenue growth' },
+  { key: 'revisions', label: 'Revisions & Sentiment', desc: 'Analyst, surprise, short interest' },
+  { key: 'low_vol',   label: 'Low Volatility',      desc: 'Beta & ATR (defensive)' },
+]
+
+function FactorPanel({ fa }: { fa: FactorAnalysis | null | undefined }) {
+  if (!fa || !fa.families) return null
+
+  const pctColor = (p: number | null) =>
+    p == null ? 'bg-surface-muted'
+    : p >= 70 ? 'bg-green-500' : p >= 50 ? 'bg-blue-500'
+    : p >= 30 ? 'bg-yellow-500' : 'bg-red-500'
+
+  const compColor = fa.composite >= 65 ? 'text-green-600 dark:text-green-400'
+    : fa.composite >= 50 ? 'text-blue-600 dark:text-blue-400'
+    : fa.composite >= 35 ? 'text-yellow-600 dark:text-yellow-400'
+    : 'text-red-600 dark:text-red-400'
+
+  const crossSectional = fa.basis === 'cross-sectional'
+
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between px-1">
+        <div className="text-xs font-bold text-ink-faint uppercase tracking-widest">Factor Decomposition</div>
+        <span
+          className="text-[10px] px-2 py-0.5 rounded-full bg-surface-muted text-ink-faint"
+          title={crossSectional
+            ? `Percentiles are cross-sectional vs ${fa.universe_n ?? '—'} large-caps (as of ${fa.universe_date ?? '—'})`
+            : 'Ranked against baseline anchors until the daily universe distribution is recorded'}
+        >
+          {crossSectional ? `vs universe · n=${fa.universe_n ?? '—'}` : 'baseline'}
+        </span>
+      </div>
+      <div className="bg-surface rounded-xl border border-surface-border p-4">
+        {/* Composite + conviction header */}
+        <div className="flex items-center justify-between gap-4 mb-4 pb-3 border-b border-surface-border">
+          <div>
+            <div className="text-xs text-ink-faint uppercase tracking-wider">Composite</div>
+            <div className={clsx('text-2xl font-bold', compColor)}>{fa.composite.toFixed(0)}<span className="text-sm text-ink-faint">/100</span></div>
+          </div>
+          <div className="text-right">
+            <div className="text-xs text-ink-faint uppercase tracking-wider">Conviction</div>
+            <div className="text-2xl font-bold text-ink">{fa.conviction.toFixed(0)}<span className="text-sm text-ink-faint">%</span></div>
+            <div className="text-[10px] text-ink-faint">factor breadth</div>
+          </div>
+        </div>
+        {/* Per-family percentile bars */}
+        <div className="space-y-2.5">
+          {FACTOR_META.map(({ key, label, desc }) => {
+            const fam = fa.families[key]
+            const p = fam?.percentile ?? null
+            const w = fa.weights?.[key]
+            return (
+              <div key={key}>
+                <div className="flex items-baseline justify-between text-xs mb-1">
+                  <span className="font-semibold text-ink" title={desc}>
+                    {label}
+                    {w != null && <span className="text-ink-faint font-normal ml-1.5">{(w * 100).toFixed(0)}%</span>}
+                  </span>
+                  <span className={clsx('font-bold', p == null ? 'text-ink-faint' : 'text-ink')}>
+                    {p == null ? 'n/a' : `${p.toFixed(0)}${crossSectional ? 'th pct' : ''}`}
+                  </span>
+                </div>
+                <div className="h-2 bg-surface-muted rounded-full overflow-hidden">
+                  <div className={clsx('h-full rounded-full transition-all', pctColor(p))} style={{ width: `${p ?? 0}%` }} />
+                </div>
+              </div>
+            )
+          })}
+        </div>
+        <div className="text-[10px] text-ink-faint mt-3 leading-relaxed">
+          {crossSectional
+            ? 'Each factor is this stock’s percentile rank vs the large-cap universe. High Value + low Momentum/Quality is a classic value trap; high across the board is a leader.'
+            : 'Ranked against baseline norms. Run the daily digest to record a live universe distribution for true cross-sectional ranking.'}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ── Financial Health strip (Piotroski, Altman-Z, ROIC, FCF) ───────────────────
+
+function FinancialHealthStrip({ h }: { h: FinancialHealth | null | undefined }) {
+  if (!h) return null
+  const has = [h.piotroski, h.altman_z, h.roic, h.fcf_yield, h.fcf_conversion, h.revision_score]
+    .some((v) => v != null)
+  if (!has) return null
+
+  const chip = (label: string, value: string, tone: 'good' | 'ok' | 'bad' | 'neutral', title: string) => {
+    const toneCls =
+      tone === 'good' ? 'text-green-700 dark:text-green-400 bg-green-50 dark:bg-green-900/20'
+      : tone === 'bad' ? 'text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20'
+      : tone === 'ok' ? 'text-yellow-700 dark:text-yellow-400 bg-yellow-50 dark:bg-yellow-900/20'
+      : 'text-ink-muted bg-surface-muted'
+    return (
+      <div key={label} className={clsx('flex flex-col px-3 py-2 rounded-lg', toneCls)} title={title}>
+        <span className="text-[10px] uppercase tracking-wider opacity-80">{label}</span>
+        <span className="text-sm font-bold">{value}</span>
+      </div>
+    )
+  }
+
+  const chips: React.ReactNode[] = []
+  if (h.piotroski != null)
+    chips.push(chip('Piotroski', `${h.piotroski}/9`,
+      h.piotroski >= 7 ? 'good' : h.piotroski >= 4 ? 'ok' : 'bad',
+      '9-point fundamental-strength checklist (profitability, leverage, efficiency)'))
+  if (h.altman_z != null)
+    chips.push(chip('Altman-Z', h.altman_z.toFixed(1),
+      h.altman_z >= 3 ? 'good' : h.altman_z >= 1.8 ? 'ok' : 'bad',
+      'Bankruptcy risk: >3 safe, 1.8–3 grey zone, <1.8 distress'))
+  if (h.roic != null)
+    chips.push(chip('ROIC', `${(h.roic * 100).toFixed(0)}%`,
+      (h.roic_excess ?? 0) > 0.05 ? 'good' : (h.roic_excess ?? 0) > 0 ? 'ok' : 'bad',
+      'Return on invested capital vs ~9% cost of capital — the test of value creation'))
+  if (h.fcf_yield != null)
+    chips.push(chip('FCF Yield', `${(h.fcf_yield * 100).toFixed(1)}%`,
+      h.fcf_yield > 0.05 ? 'good' : h.fcf_yield > 0.02 ? 'ok' : 'neutral',
+      'Free cash flow / market cap — a cleaner cheapness gauge than P/E'))
+  if (h.fcf_conversion != null)
+    chips.push(chip('FCF Conv.', `${(h.fcf_conversion * 100).toFixed(0)}%`,
+      h.fcf_conversion >= 0.8 ? 'good' : h.fcf_conversion >= 0.5 ? 'ok' : 'bad',
+      'FCF / net income — are profits real cash or accounting?'))
+  if (h.revision_score != null && h.revision_score !== 0)
+    chips.push(chip('Revisions', `${h.revision_score > 0 ? '+' : ''}${h.revision_score.toFixed(0)}`,
+      h.revision_score > 0 ? 'good' : 'bad',
+      'Net analyst upgrades − downgrades (estimate momentum)'))
+
+  return (
+    <div className="space-y-2">
+      <div className="text-xs font-bold text-ink-faint uppercase tracking-widest px-1">Financial Health</div>
+      <div className="bg-surface rounded-xl border border-surface-border p-3 flex flex-wrap gap-2">
+        {chips}
+      </div>
+    </div>
+  )
+}
+
 // ── Patterns Panel ────────────────────────────────────────────────────────────
 
 function PatternsPanel({ patterns }: { patterns: TechnicalPattern[] }) {
@@ -2175,6 +2319,12 @@ export function StockAnalysisPage() {
 
             {/* Short-term + Long-term horizon analysis */}
             <HorizonPanel st={result.st_analysis} lt={result.lt_analysis} />
+
+            {/* Institutional cross-sectional factor decomposition */}
+            <FactorPanel fa={result.factor_analysis} />
+
+            {/* Financial-health metrics (Piotroski, Altman-Z, ROIC, FCF) */}
+            <FinancialHealthStrip h={result.financial_health} />
 
             {/* Final Verdict — admin-only AI judgement with price targets */}
             {isAdmin && (result.st_analysis || result.lt_analysis) && (

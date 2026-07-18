@@ -462,6 +462,35 @@ export interface StockAnalysisResult {
   weekly?: WeeklyConfirmation | null
   st_analysis?: HorizonAnalysis | null
   lt_analysis?: HorizonAnalysis | null
+  factor_analysis?: FactorAnalysis | null
+  financial_health?: FinancialHealth | null
+}
+
+export interface FinancialHealth {
+  piotroski?: number | null
+  altman_z?: number | null
+  roic?: number | null
+  roic_excess?: number | null
+  fcf_yield?: number | null
+  fcf_conversion?: number | null
+  revision_score?: number | null
+}
+
+export interface FactorFamily {
+  percentile: number | null
+  metrics: Record<string, number>
+  n: number
+}
+
+export interface FactorAnalysis {
+  families: Record<string, FactorFamily>
+  composite: number
+  conviction: number
+  weights: Record<string, number>
+  coverage: number
+  universe_date: string | null
+  universe_n: number | null
+  basis: 'cross-sectional' | 'static-anchors'
 }
 
 export interface RSRating {

@@ -84,6 +84,19 @@ def _score_ticker_for_digest(
         lt_score = row.get("lt_smoothed") if lt else None
         lt_signal = row.get("lt_signal") if lt else None
 
+        # Raw factor exposures — accumulated across the universe into the daily
+        # cross-sectional distribution single-stock analysis ranks against.
+        # Includes financial-health metrics (Piotroski/Altman/ROIC/FCF) so the
+        # universe distribution covers the same factors single-stock analysis uses.
+        from backend.services.factor_engine import merge_factor_data, compute_exposures
+        from backend.services.financial_health import get_financial_health
+        fdata = merge_factor_data(tech, fund, None, rs_score)
+        try:
+            fdata.update({k: v for k, v in get_financial_health(ticker).items() if v is not None})
+        except Exception:
+            pass
+        exposures = compute_exposures(fdata)
+
         return {
             "ticker":        ticker,
             "company":       company,
@@ -97,6 +110,7 @@ def _score_ticker_for_digest(
             "lt_signal":     lt_signal if lt else None,
             "lt_reasoning":  lt["reasoning"] if lt else [],
             "_signal_row":   {"ticker": ticker, **row},
+            "_exposures":    exposures,
         }
     except Exception as exc:
         logger.debug("Digest scoring failed for %s: %s", ticker, exc)
@@ -170,6 +184,18 @@ def run_daily_digest(force: bool = False) -> dict:
                 )
         except Exception as exc:
             logger.warning("Signal history bulk upsert failed: %s", exc)
+
+        # Compute + persist the day's cross-sectional factor distribution, which
+        # single-stock analysis ranks each ticker against (institutional-style).
+        try:
+            from backend.services.factor_engine import accumulate_universe_stats
+            exp_rows = [s["_exposures"] for s in scored if s.get("_exposures")]
+            if len(exp_rows) >= 10:
+                stats = accumulate_universe_stats(exp_rows)
+                db.save_factor_universe_stats(today, stats, len(exp_rows))
+                logger.info("Saved factor universe stats over %d stocks", len(exp_rows))
+        except Exception as exc:
+            logger.warning("Factor universe stats save failed: %s", exc)
 
         # Top 5 short-term: high ST score + RS > 65 + positive day change preferred
         st_eligible = [
