@@ -440,19 +440,36 @@ Return ONLY valid JSON in this exact schema (no markdown, no extra text):
         client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
         msg = client.messages.create(
             model="claude-haiku-4-5-20251001",
-            max_tokens=1024,
+            max_tokens=2048,   # was 1024 — the expanded verdict schema was truncating mid-JSON
             messages=[{"role": "user", "content": prompt}],
         )
-        raw = msg.content[0].text.strip()
-        # Strip markdown fences if present
+        raw = (msg.content[0].text or "").strip()
+
+        # Strip markdown fences, then isolate the outermost JSON object so any
+        # stray prose before/after the braces can't break the parse.
         if raw.startswith("```"):
-            raw = raw.split("```")[1]
-            if raw.startswith("json"):
-                raw = raw[4:]
-        verdict = json.loads(raw)
+            raw = raw.split("```", 2)[1] if raw.count("```") >= 2 else raw.strip("`")
+            if raw.lstrip().lower().startswith("json"):
+                raw = raw.lstrip()[4:]
+        start, end = raw.find("{"), raw.rfind("}")
+        if start != -1 and end > start:
+            raw = raw[start:end + 1]
+
+        try:
+            verdict = json.loads(raw)
+        except json.JSONDecodeError:
+            # Most common failure is truncation when the model hits the token cap.
+            if getattr(msg, "stop_reason", None) == "max_tokens":
+                raise HTTPException(
+                    status_code=502,
+                    detail="AI verdict was cut off (response too long). Please retry.",
+                )
+            raise
         verdict["ticker"] = ticker
         verdict["price"]  = price
         return verdict
+    except HTTPException:
+        raise
     except json.JSONDecodeError as exc:
         raise HTTPException(status_code=500, detail=f"AI returned invalid JSON: {exc}")
     except Exception as exc:
