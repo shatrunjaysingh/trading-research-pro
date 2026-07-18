@@ -1381,18 +1381,24 @@ function FinancialHealthStrip({ h, inline = false }: { h: FinancialHealth | null
 
 // ── Decision Summary (consolidated hero) ──────────────────────────────────────
 
-function DecisionSummary({ result, onRefresh, currency = '$' }: { result: StockAnalysisResult; onRefresh: () => void; currency?: string }) {
+// Shared signal derivation used by the rating hero and analysis panel.
+function deriveDecision(result: StockAnalysisResult) {
   const tech = result.technical
   const fa   = result.factor_analysis
-  const rs   = result.rs_rating
-  const st   = result.st_analysis
-  const lt   = result.lt_analysis
-
-  // Headline decision: prefer the institutional factor composite; fall back to
-  // the momentum score. One number, one signal — not five competing cards.
   const composite  = fa?.composite ?? tech?.score ?? 50
   const conviction = fa?.conviction ?? tech?.confidence ?? 0
   const signal = composite >= 65 ? 'buy' : composite >= 52 ? 'watch' : composite >= 38 ? 'hold' : 'sell'
+  return { composite, conviction, signal }
+}
+
+const SIGNAL_LABEL: Record<string, string> = { buy: 'BUY', watch: 'WATCH', hold: 'HOLD', sell: 'SELL' }
+
+// DecisionSummary — the ONLY thing shown up top: the final rating + a one-line
+// plain-English takeaway. Everything else lives in collapsible panels below.
+function DecisionSummary({ result, onRefresh, currency = '$' }: { result: StockAnalysisResult; onRefresh: () => void; currency?: string }) {
+  const tech = result.technical
+  const fa   = result.factor_analysis
+  const { composite, conviction, signal } = deriveDecision(result)
 
   const pill: Record<string, string> = {
     buy: 'bg-green-600 text-white', watch: 'bg-blue-600 text-white',
@@ -1404,79 +1410,108 @@ function DecisionSummary({ result, onRefresh, currency = '$' }: { result: StockA
     hold:  'from-yellow-50 to-amber-50 border-yellow-200 dark:from-yellow-900/20 dark:to-amber-900/20 dark:border-yellow-800',
     sell:  'from-red-50 to-pink-50 border-red-200 dark:from-red-900/20 dark:to-pink-900/20 dark:border-red-800',
   }
-  const pctColor = (p: number | null) =>
-    p == null ? 'bg-surface-muted' : p >= 70 ? 'bg-green-500' : p >= 50 ? 'bg-blue-500' : p >= 30 ? 'bg-yellow-500' : 'bg-red-500'
-  const convColor = conviction >= 70 ? 'text-green-600 dark:text-green-400'
-    : conviction >= 50 ? 'text-yellow-600 dark:text-yellow-400' : 'text-red-500 dark:text-red-400'
+  const convLabel = conviction >= 70 ? 'high conviction' : conviction >= 50 ? 'moderate conviction' : 'low conviction'
+
+  // Plain-English takeaway from the strongest & weakest factor family.
+  let takeaway = ''
+  if (fa?.families) {
+    const ranked = FACTOR_META
+      .map(m => ({ label: m.label, p: fa.families[m.key]?.percentile ?? null }))
+      .filter((x): x is { label: string; p: number } => x.p != null)
+      .sort((a, b) => b.p - a.p)
+    if (ranked.length) {
+      const top = ranked[0], bot = ranked[ranked.length - 1]
+      takeaway = `Strongest on ${top.label} (${top.p.toFixed(0)}th pct); weakest on ${bot.label} (${bot.p.toFixed(0)}th).`
+    }
+  }
 
   return (
-    <div className={clsx('rounded-2xl border bg-gradient-to-r p-5 space-y-4', bg[signal])}>
-      {/* Header: ticker / company / price */}
-      <div className="flex items-start justify-between gap-4 flex-wrap">
+    <div className={clsx('rounded-2xl border bg-gradient-to-r p-5', bg[signal])}>
+      <div className="flex items-center justify-between gap-4 flex-wrap">
+        {/* Ticker + company + price */}
         <div className="min-w-0">
-          <div className="flex items-center gap-3 flex-wrap">
-            <h2 className="text-3xl font-extrabold text-ink tracking-tight">{result.ticker}</h2>
-            <span className={clsx('px-3 py-1 rounded-full text-sm font-bold uppercase tracking-wider', pill[signal])}>{signal}</span>
+          <div className="flex items-center gap-2 flex-wrap">
+            <h2 className="text-2xl font-extrabold text-ink tracking-tight">{result.ticker}</h2>
+            {tech?.current_price != null && (
+              <span className="text-lg font-bold text-ink">{currency}{tech.current_price.toFixed(2)}</span>
+            )}
+            {tech?.day_change_pct != null && (
+              <span className={clsx('text-sm font-semibold', chgColor(tech.day_change_pct))}>
+                {tech.day_change_pct >= 0 ? '+' : ''}{tech.day_change_pct.toFixed(2)}%
+              </span>
+            )}
           </div>
-          {result.company_name && <p className="text-ink-muted text-sm mt-1">{result.company_name}</p>}
+          {result.company_name && <p className="text-ink-muted text-sm mt-0.5 truncate">{result.company_name}</p>}
           <div className="mt-2 flex items-center gap-3 flex-wrap">
             <WatchlistButton ticker={result.ticker} />
             <CacheBadge result={result} onRefresh={onRefresh} />
           </div>
         </div>
-        {tech?.current_price != null && (
-          <div className="text-right shrink-0">
-            <div className="text-2xl font-extrabold text-ink">{currency}{tech.current_price.toFixed(2)}</div>
-            <div className={clsx('text-sm font-semibold', chgColor(tech.day_change_pct))}>
-              {tech.day_change_pct != null ? `${tech.day_change_pct >= 0 ? '+' : ''}${tech.day_change_pct.toFixed(2)}%` : '—'}
-            </div>
+
+        {/* The rating */}
+        <div className="flex items-center gap-5 shrink-0">
+          <div className="text-center">
+            <div className="text-4xl font-black text-ink leading-none">{composite.toFixed(0)}</div>
+            <div className="text-[10px] text-ink-faint uppercase tracking-wide mt-1">Rating /100</div>
           </div>
-        )}
+          <div className="text-center">
+            <span className={clsx('inline-block px-4 py-2 rounded-xl text-lg font-black uppercase tracking-wider', pill[signal])}>
+              {SIGNAL_LABEL[signal]}
+            </span>
+            <div className="text-[11px] text-ink-muted mt-1">{conviction.toFixed(0)}% · {convLabel}</div>
+          </div>
+        </div>
       </div>
 
-      {/* Decision numbers */}
-      <div className="flex items-center gap-6 rounded-xl bg-white/50 dark:bg-white/5 px-4 py-3">
-        <div>
-          <div className="text-3xl font-extrabold text-ink leading-none">{composite.toFixed(0)}<span className="text-sm text-ink-faint">/100</span></div>
-          <div className="text-xs text-ink-muted mt-0.5">Composite</div>
-        </div>
-        <div className="w-px h-9 bg-surface-border" />
-        <div>
-          <div className={clsx('text-3xl font-extrabold leading-none', convColor)}>{conviction.toFixed(0)}%</div>
-          <div className="text-xs text-ink-muted mt-0.5">Conviction</div>
-        </div>
-        {fa && (
-          <div className="text-[10px] text-ink-faint ml-auto self-end text-right">
-            {fa.basis === 'cross-sectional' ? `ranked vs ${fa.universe_n ?? '—'} peers` : 'baseline ranking'}
-          </div>
-        )}
-      </div>
+      {takeaway && <p className="text-xs text-ink-muted mt-3 pt-3 border-t border-black/5 dark:border-white/10">{takeaway}</p>}
+    </div>
+  )
+}
 
-      {/* Factor percentile bars */}
+// AnalysisDetail — factor breakdown + supporting metrics + financial health.
+// Lives inside a collapsible panel so the top of the page stays a clean rating.
+function AnalysisDetail({ result }: { result: StockAnalysisResult }) {
+  const fa = result.factor_analysis
+  const rs = result.rs_rating
+  const st = result.st_analysis
+  const lt = result.lt_analysis
+  const pctColor = (p: number | null) =>
+    p == null ? 'bg-surface-muted' : p >= 70 ? 'bg-green-500' : p >= 50 ? 'bg-blue-500' : p >= 30 ? 'bg-yellow-500' : 'bg-red-500'
+
+  return (
+    <div className="space-y-4">
       {fa?.families && (
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-2">
-          {FACTOR_META.map(({ key, label, desc }) => {
-            const p = fa.families[key]?.percentile ?? null
-            return (
-              <div key={key} className="flex items-center gap-2" title={desc}>
-                <span className="text-xs text-ink-muted w-32 shrink-0">{label}</span>
-                <div className="h-2 flex-1 bg-surface-muted rounded-full overflow-hidden">
-                  <div className={clsx('h-full rounded-full', pctColor(p))} style={{ width: `${p ?? 0}%` }} />
+        <div>
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-xs font-semibold text-ink">Factor breakdown</span>
+            <span className="text-[10px] text-ink-faint">
+              {fa.basis === 'cross-sectional' ? `percentile vs ${fa.universe_n ?? '—'} peers` : 'baseline ranking'}
+            </span>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-2">
+            {FACTOR_META.map(({ key, label, desc }) => {
+              const p = fa.families[key]?.percentile ?? null
+              return (
+                <div key={key} className="flex items-center gap-2" title={desc}>
+                  <span className="text-xs text-ink-muted w-32 shrink-0">{label}</span>
+                  <div className="h-2 flex-1 bg-surface-muted rounded-full overflow-hidden">
+                    <div className={clsx('h-full rounded-full', pctColor(p))} style={{ width: `${p ?? 0}%` }} />
+                  </div>
+                  <span className="text-xs font-bold text-ink w-8 text-right">{p == null ? '—' : p.toFixed(0)}</span>
                 </div>
-                <span className="text-xs font-bold text-ink w-8 text-right">{p == null ? '—' : p.toFixed(0)}</span>
-              </div>
-            )
-          })}
+              )
+            })}
+          </div>
         </div>
       )}
 
-      {/* Supporting metrics + financial-health chips */}
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-ink-muted">
         {rs && <span>RS <strong className="text-ink">{rs.rs_score}</strong></span>}
         {st && <span>Short-term <strong className="text-ink">{st.score.toFixed(0)}</strong> · {st.signal}</span>}
         {lt && <span>Long-term <strong className="text-ink">{lt.score.toFixed(0)}</strong> · {lt.signal}</span>}
         {result.weekly?.trend_w && <span>Weekly <strong className="text-ink">{result.weekly.trend_w === 'up' ? '↑ up' : '↓ down'}</strong></span>}
       </div>
+
       <FinancialHealthStrip h={result.financial_health} inline />
     </div>
   )
@@ -2454,9 +2489,15 @@ export function StockAnalysisPage() {
               </p>
             </div>
 
-            {/* One consolidated decision hero: signal + composite + conviction +
-                factor breakdown + key metrics + financial health, in a single card. */}
+            {/* Final decision rating — the one thing shown up top. */}
             <DecisionSummary result={result} onRefresh={() => handleRun(true)} currency={currency} />
+
+            {/* Analysis — factor breakdown, metrics & health (collapsed by default) */}
+            {(result.factor_analysis || result.financial_health || result.rs_rating) && (
+              <Section title="Analysis" subtitle="factor breakdown, metrics & financial health">
+                <AnalysisDetail result={result} />
+              </Section>
+            )}
 
             {/* Final Verdict — admin-only AI judgement with price targets */}
             {isAdmin && (result.st_analysis || result.lt_analysis) && (
