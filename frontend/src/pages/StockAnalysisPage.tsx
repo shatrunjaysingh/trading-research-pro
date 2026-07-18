@@ -704,7 +704,7 @@ function StockChartPanel({
         <ResponsiveContainer width="100%" height={224}>
           <AreaChart
             data={chartData}
-            margin={{ top: 8, right: 8, bottom: 0, left: 8 }}
+            margin={{ top: 8, right: 8, bottom: 0, left: 0 }}
             onMouseMove={(s: unknown) => {
               const pt = (s as { activePayload?: { payload?: { close?: number; date?: string } }[] })
                 ?.activePayload?.[0]?.payload
@@ -718,15 +718,34 @@ function StockChartPanel({
                 <stop offset="100%" stopColor={lineColor} stopOpacity={0} />
               </linearGradient>
             </defs>
-            <XAxis dataKey="date" hide />
-            <YAxis domain={['dataMin', 'dataMax']} hide />
+            {/* Faint date axis + a price axis on the right (kept visible so the
+                plot area sizes correctly — hiding both axes renders nothing). */}
+            <XAxis
+              dataKey="date"
+              tick={{ fontSize: 10, fill: 'var(--color-ink-faint)' }}
+              tickLine={false}
+              axisLine={false}
+              minTickGap={40}
+            />
+            <YAxis
+              orientation="right"
+              domain={['dataMin', 'dataMax']}
+              tick={{ fontSize: 10, fill: 'var(--color-ink-faint)' }}
+              tickLine={false}
+              axisLine={false}
+              width={52}
+              tickFormatter={(v: number) => `${currency}${v >= 1000 ? v.toFixed(0) : v.toFixed(2)}`}
+            />
             {/* Baseline at the period's starting price (Robinhood-style) */}
             <ReferenceLine y={first} stroke="var(--color-ink-faint)" strokeDasharray="4 4" strokeOpacity={0.4} />
             <RechartTooltip
               cursor={{ stroke: 'var(--color-ink-faint)', strokeWidth: 1 }}
-              content={() => null}
+              contentStyle={{ background: 'var(--color-surface)', border: '1px solid var(--color-surface-border)', borderRadius: 8, fontSize: 12 }}
+              labelFormatter={(l) => String(l)}
+              formatter={(v) => [`${currency}${Number(v).toFixed(2)}`, 'Price']}
             />
             <Area
+              type="monotone"
               dataKey="close"
               stroke={lineColor}
               strokeWidth={2}
