@@ -1,7 +1,7 @@
 import { useState, useRef, useMemo, useEffect, useCallback } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
-  ComposedChart, Area, Bar, Line, XAxis, YAxis,
+  ComposedChart, Area, AreaChart, Bar, Line, XAxis, YAxis,
   CartesianGrid, Tooltip as RechartTooltip, ResponsiveContainer, LineChart,
   ReferenceLine, Tooltip,
 } from 'recharts'
@@ -604,11 +604,20 @@ function computeSMA(closes: number[], period: number): (number | null)[] {
   })
 }
 
+const CHART_PERIODS: { value: string; label: string }[] = [
+  { value: '1d', label: '1D' },
+  { value: '1w', label: '1W' },
+  { value: '1m', label: '1M' },
+  { value: '3m', label: '3M' },
+  { value: '6m', label: '6M' },
+  { value: '1y', label: '1Y' },
+]
+
+// Robinhood-style price chart: one line coloured by the period's gain/loss, a
+// soft gradient fill, no gridlines/axes, period pills, and a hover scrubber.
 function StockChartPanel({
   ticker,
   period,
-  indicators,
-  eps,
   currency = '$',
 }: {
   ticker: string
@@ -617,192 +626,121 @@ function StockChartPanel({
   eps: number | null | undefined
   currency?: string
 }) {
-  const [showPE, setShowPE] = useState(false)
+  const [chartPeriod, setChartPeriod] = useState(period)
+  const [hover, setHover] = useState<{ price: number; date: string } | null>(null)
 
   const { data, isLoading, isError } = useQuery({
-    queryKey: ['stock-history', ticker, period],
-    queryFn: () => fetchStockHistory(ticker, period),
+    queryKey: ['stock-history', ticker, chartPeriod],
+    queryFn: () => fetchStockHistory(ticker, chartPeriod),
     staleTime: 5 * 60 * 1000,
   })
 
-  const chartData = useMemo(() => {
-    if (!data?.bars?.length) return []
-    const closes = data.bars.map(b => b.close ?? 0)
-    const sma20v  = computeSMA(closes, 20)
-    const sma50v  = computeSMA(closes, 50)
-    const sma200v = computeSMA(closes, 200)
+  const chartData = useMemo(
+    () => (data?.bars ?? [])
+      .filter(b => b.close != null)
+      .map(b => ({ date: b.date, close: +Number(b.close).toFixed(4) })),
+    [data],
+  )
 
-    return data.bars.map((bar, i) => ({
-      ...bar,
-      close:  bar.close  != null ? +bar.close.toFixed(4)  : null,
-      sma20:  indicators.includes('sma20')   ? sma20v[i]  : undefined,
-      sma50:  indicators.includes('sma50')   ? sma50v[i]  : undefined,
-      sma200: indicators.includes('sma200')  ? sma200v[i] : undefined,
-      pe:     showPE && eps && eps > 0 && bar.close
-                ? +( bar.close / Math.abs(eps) ).toFixed(1)
-                : undefined,
-    }))
-  }, [data, indicators, eps, showPE])
+  const prices    = chartData.map(d => d.close)
+  const first     = prices[0] ?? 0
+  const last      = prices[prices.length - 1] ?? 0
+  const up        = last >= first
+  const lineColor = up ? '#16a34a' : '#dc2626'
+  const change    = last - first
+  const changePct = first ? (change / first) * 100 : 0
+  const gradId    = `grad-${up ? 'up' : 'down'}`
 
-  const TooltipContent = ({ active, payload, label }: { active?: boolean; payload?: { dataKey: string; value: number; color: string; name: string }[]; label?: string }) => {
-    if (!active || !payload?.length) return null
-    return (
-      <div className="bg-surface border border-surface-border rounded-lg p-3 text-xs shadow-lg">
-        <div className="font-semibold text-ink mb-1.5 text-[11px]">{label}</div>
-        {payload.map(p => (
-          <div key={p.dataKey} className="flex items-center gap-2 py-0.5">
-            <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: p.color }} />
-            <span className="text-ink-muted">{p.name}:</span>
-            <span className="font-medium text-ink">
-              {p.dataKey === 'volume'
-                ? p.value >= 1e6 ? `${(p.value / 1e6).toFixed(2)}M` : p.value.toLocaleString()
-                : p.dataKey === 'pe' ? `${p.value}x`
-                : `${currency}${Number(p.value).toFixed(2)}`}
-            </span>
-          </div>
-        ))}
-      </div>
-    )
-  }
+  // The header price/change follows the cursor when scrubbing, else the latest.
+  const shownPrice = hover?.price ?? last
+  const shownChange = (hover?.price ?? last) - first
+  const shownPct = first ? (shownChange / first) * 100 : 0
 
-  if (isLoading) {
-    return (
-      <div className="bg-surface rounded-xl border border-surface-border p-4 h-52 flex items-center justify-center">
-        <div className="flex items-center gap-2 text-ink-muted text-sm">
-          <span className="w-4 h-4 rounded-full border-2 border-primary border-t-transparent animate-spin" />
-          Loading chart…
-        </div>
-      </div>
-    )
-  }
-
-  if (isError || !chartData.length) {
-    return (
-      <div className="bg-surface rounded-xl border border-surface-border p-4 h-20 flex items-center justify-center text-sm text-ink-muted">
-        Chart data unavailable
-      </div>
-    )
-  }
-
-  const prices  = chartData.map(d => d.close).filter((v): v is number => v != null)
-  const minPx   = Math.min(...prices) * 0.995
-  const maxPx   = Math.max(...prices) * 1.005
-
-  const tickInterval = chartData.length <= 30 ? 3 : chartData.length <= 90 ? 9 : 20
+  const periodBtns = (
+    <div className="flex items-center gap-1">
+      {CHART_PERIODS.map(({ value, label }) => (
+        <button
+          key={value}
+          onClick={() => setChartPeriod(value)}
+          className={clsx(
+            'px-2.5 py-1 rounded-lg text-xs font-semibold transition-colors',
+            chartPeriod === value
+              ? 'bg-ink text-surface'
+              : 'text-ink-muted hover:bg-surface-muted',
+          )}
+        >
+          {label}
+        </button>
+      ))}
+    </div>
+  )
 
   return (
     <div className="bg-surface rounded-xl border border-surface-border p-4 space-y-3">
-      <div className="flex items-center justify-between flex-wrap gap-2">
-        <div className="text-sm font-semibold text-ink">Price & Volume — {period.toUpperCase()}</div>
-        <div className="flex items-center gap-2 flex-wrap">
-          {eps && Math.abs(eps) > 0.01 && (
-            <button
-              onClick={() => setShowPE(v => !v)}
-              className={clsx(
-                'px-2.5 py-1 rounded-lg border text-xs font-medium transition-all',
-                showPE
-                  ? 'bg-purple-600 text-white border-purple-600'
-                  : 'bg-surface-muted text-ink-muted border-surface-border hover:border-primary/50',
-              )}
-            >
-              P/E Chart
-            </button>
-          )}
-          <span className="text-xs text-ink-faint">{chartData.length} bars</span>
+      {/* Header: price + period change */}
+      <div className="flex items-end justify-between gap-3 flex-wrap">
+        <div>
+          <div className="text-2xl font-extrabold text-ink leading-none">
+            {currency}{shownPrice.toFixed(2)}
+          </div>
+          <div className={clsx('text-sm font-semibold mt-1', shownChange >= 0 ? 'text-green-600 dark:text-green-400' : 'text-red-500 dark:text-red-400')}>
+            {shownChange >= 0 ? '▲' : '▼'} {currency}{Math.abs(shownChange).toFixed(2)} ({shownChange >= 0 ? '+' : ''}{shownPct.toFixed(2)}%)
+            <span className="text-ink-faint font-normal ml-1.5">
+              {hover ? hover.date : CHART_PERIODS.find(p => p.value === chartPeriod)?.label}
+            </span>
+          </div>
         </div>
+        <div className="hidden sm:block">{periodBtns}</div>
       </div>
 
-      {/* Price + Volume */}
-      <ResponsiveContainer width="100%" height={300}>
-        <ComposedChart data={chartData} margin={{ top: 4, right: 50, bottom: 0, left: 0 }}>
-          <CartesianGrid strokeDasharray="3 3" stroke="var(--color-surface-border)" />
-          <XAxis
-            dataKey="date"
-            tick={{ fontSize: 10, fill: 'var(--color-ink-faint)' }}
-            tickLine={false}
-            interval={tickInterval}
-          />
-          <YAxis
-            yAxisId="price"
-            domain={[minPx, maxPx]}
-            tick={{ fontSize: 10, fill: 'var(--color-ink-faint)' }}
-            tickLine={false}
-            tickFormatter={v => `${currency}${Number(v).toFixed(0)}`}
-            width={56}
-          />
-          <YAxis
-            yAxisId="vol"
-            orientation="right"
-            tick={{ fontSize: 10, fill: 'var(--color-ink-faint)' }}
-            tickLine={false}
-            tickFormatter={v => v >= 1e6 ? `${(v / 1e6).toFixed(0)}M` : `${(v / 1e3).toFixed(0)}K`}
-            width={46}
-          />
-          <RechartTooltip content={<TooltipContent />} />
-
-          <Area
-            yAxisId="price"
-            dataKey="close"
-            name="Close"
-            stroke="#3b82f6"
-            fill="#3b82f615"
-            strokeWidth={1.5}
-            dot={false}
-            activeDot={{ r: 3, fill: '#3b82f6' }}
-          />
-          {indicators.includes('sma20') && (
-            <Line yAxisId="price" dataKey="sma20" name="SMA 20" stroke="#10b981" strokeWidth={1} dot={false} />
-          )}
-          {indicators.includes('sma50') && (
-            <Line yAxisId="price" dataKey="sma50" name="SMA 50" stroke="#f97316" strokeWidth={1.5} dot={false} />
-          )}
-          {indicators.includes('sma200') && (
-            <Line yAxisId="price" dataKey="sma200" name="SMA 200" stroke="#ef4444" strokeWidth={1.5} dot={false} />
-          )}
-          <Bar
-            yAxisId="vol"
-            dataKey="volume"
-            name="Volume"
-            fill="#64748b"
-            opacity={0.3}
-            radius={[1, 1, 0, 0]}
-          />
-        </ComposedChart>
-      </ResponsiveContainer>
-
-      {/* P/E mini-chart */}
-      {showPE && eps && Math.abs(eps) > 0.01 && (
-        <div className="pt-3 border-t border-surface-border">
-          <div className="text-xs text-ink-faint mb-2">
-            P/E Ratio (estimated · trailing EPS {fmt(eps, 2, currency)})
-          </div>
-          <ResponsiveContainer width="100%" height={90}>
-            <LineChart data={chartData} margin={{ top: 2, right: 50, bottom: 0, left: 0 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="var(--color-surface-border)" />
-              <XAxis dataKey="date" hide />
-              <YAxis
-                domain={['auto', 'auto']}
-                tick={{ fontSize: 10, fill: 'var(--color-ink-faint)' }}
-                tickLine={false}
-                tickFormatter={v => `${Number(v).toFixed(0)}x`}
-                width={36}
-              />
-              <RechartTooltip formatter={(v) => [typeof v === 'number' ? `${v.toFixed(1)}x` : '—', 'P/E']} />
-              <Line dataKey="pe" name="P/E" stroke="#8b5cf6" strokeWidth={1.5} dot={false} />
-            </LineChart>
-          </ResponsiveContainer>
+      {isLoading ? (
+        <div className="h-56 flex items-center justify-center text-ink-muted text-sm">
+          <span className="w-4 h-4 rounded-full border-2 border-primary border-t-transparent animate-spin mr-2" />
+          Loading…
         </div>
+      ) : isError || !chartData.length ? (
+        <div className="h-24 flex items-center justify-center text-sm text-ink-muted">Chart data unavailable</div>
+      ) : (
+        <ResponsiveContainer width="100%" height={224}>
+          <AreaChart
+            data={chartData}
+            margin={{ top: 8, right: 8, bottom: 0, left: 8 }}
+            onMouseMove={(s: unknown) => {
+              const pt = (s as { activePayload?: { payload?: { close?: number; date?: string } }[] })
+                ?.activePayload?.[0]?.payload
+              if (pt?.close != null && pt.date) setHover({ price: pt.close, date: pt.date })
+            }}
+            onMouseLeave={() => setHover(null)}
+          >
+            <defs>
+              <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor={lineColor} stopOpacity={0.25} />
+                <stop offset="100%" stopColor={lineColor} stopOpacity={0} />
+              </linearGradient>
+            </defs>
+            <XAxis dataKey="date" hide />
+            <YAxis domain={['dataMin', 'dataMax']} hide />
+            {/* Baseline at the period's starting price (Robinhood-style) */}
+            <ReferenceLine y={first} stroke="var(--color-ink-faint)" strokeDasharray="4 4" strokeOpacity={0.4} />
+            <RechartTooltip
+              cursor={{ stroke: 'var(--color-ink-faint)', strokeWidth: 1 }}
+              content={() => null}
+            />
+            <Area
+              dataKey="close"
+              stroke={lineColor}
+              strokeWidth={2}
+              fill={`url(#${gradId})`}
+              dot={false}
+              activeDot={{ r: 4, fill: lineColor, stroke: 'var(--color-surface)', strokeWidth: 2 }}
+              isAnimationActive={false}
+            />
+          </AreaChart>
+        </ResponsiveContainer>
       )}
 
-      {/* Legend */}
-      <div className="flex flex-wrap gap-4 text-[11px] text-ink-faint pt-1">
-        <span className="flex items-center gap-1.5"><span className="w-4 h-px bg-blue-500 inline-block" /> Close price</span>
-        <span className="flex items-center gap-1.5"><span className="w-4 h-2 bg-slate-500 opacity-60 inline-block rounded-sm" /> Volume</span>
-        {indicators.includes('sma20')  && <span className="flex items-center gap-1.5"><span className="w-4 h-px bg-emerald-500 inline-block" /> SMA 20</span>}
-        {indicators.includes('sma50')  && <span className="flex items-center gap-1.5"><span className="w-4 h-px bg-orange-500 inline-block" /> SMA 50</span>}
-        {indicators.includes('sma200') && <span className="flex items-center gap-1.5"><span className="w-4 h-px bg-red-500 inline-block" /> SMA 200</span>}
-        {showPE && <span className="flex items-center gap-1.5"><span className="w-4 h-px bg-purple-500 inline-block" /> P/E</span>}
-      </div>
+      {/* Period pills on mobile */}
+      <div className="sm:hidden flex justify-center">{periodBtns}</div>
     </div>
   )
 }
@@ -1638,6 +1576,95 @@ function Section({ title, subtitle, children, defaultOpen = false }: { title: st
       </summary>
       <div className="space-y-4 rounded-b-xl border border-t-0 border-surface-border bg-surface/40 px-4 py-4">{children}</div>
     </details>
+  )
+}
+
+// ── Institutional Ownership Panel ─────────────────────────────────────────────
+
+function InstitutionalPanel({ inst }: { inst: NonNullable<StockAnalysisResult['institutional']> }) {
+  const sig = inst.top10_signal
+  return (
+    <div className="bg-surface rounded-xl border border-surface-border p-4">
+      <div className="text-sm font-semibold text-ink mb-3">Institutional Ownership — Buying vs Selling</div>
+
+      {/* Summary banner */}
+      {sig && sig !== 'mixed' && (
+        <div className={`flex items-center gap-2 rounded-lg px-3 py-2 mb-3 text-xs border ${
+          sig === 'buying'
+            ? 'bg-green-50 dark:bg-green-900/20 border-green-300 dark:border-green-700 text-green-800 dark:text-green-300'
+            : 'bg-red-50 dark:bg-red-900/20 border-red-300 dark:border-red-700 text-red-800 dark:text-red-300'
+        }`}>
+          <span>{sig === 'buying' ? '↑' : '↓'}</span>
+          <span>
+            {sig === 'buying'
+              ? `${inst.top10_buyers} of top 10 holders increased position last quarter`
+              : `${inst.top10_sellers} of top 10 holders reduced position last quarter`}
+          </span>
+        </div>
+      )}
+
+      {/* Stats row */}
+      <div className="divide-y divide-surface-border/60 mb-3">
+        {inst.inst_pct_held != null && (
+          <div className="flex justify-between items-center py-2">
+            <span className="text-sm text-ink-muted">Institutions Hold</span>
+            <span className="text-sm font-semibold text-ink">{(inst.inst_pct_held * 100).toFixed(1)}%</span>
+          </div>
+        )}
+        {inst.insider_pct_held != null && (
+          <div className="flex justify-between items-center py-2">
+            <span className="text-sm text-ink-muted">Insider Hold</span>
+            <span className="text-sm font-semibold text-ink">{(inst.insider_pct_held * 100).toFixed(1)}%</span>
+          </div>
+        )}
+        {inst.inst_count != null && (
+          <div className="flex justify-between items-center py-2">
+            <span className="text-sm text-ink-muted">Institution Count</span>
+            <span className="text-sm font-semibold text-ink">{inst.inst_count.toLocaleString()}</span>
+          </div>
+        )}
+        {inst.top10_buyers != null && (
+          <div className="flex justify-between items-center py-2">
+            <span className="text-sm text-ink-muted">Top 10 — Last Quarter</span>
+            <span className="text-sm font-semibold">
+              <span className="text-green-600">{inst.top10_buyers} buying</span>
+              <span className="text-ink-muted mx-1">·</span>
+              <span className="text-red-500">{inst.top10_sellers} selling</span>
+            </span>
+          </div>
+        )}
+      </div>
+
+      {/* Top holders table */}
+      {inst.top_holders?.length > 0 && (
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="text-ink-faint border-b border-surface-border">
+                <th className="text-left py-1.5 font-medium">Holder</th>
+                <th className="text-right py-1.5 font-medium">% Held</th>
+                <th className="text-right py-1.5 font-medium">Shares</th>
+                <th className="text-right py-1.5 font-medium">Q Change</th>
+              </tr>
+            </thead>
+            <tbody>
+              {inst.top_holders.map((h, i) => (
+                <tr key={i} className="border-b border-surface-border/40 last:border-0">
+                  <td className="py-1.5 text-ink-muted max-w-[160px] truncate pr-2">{h.holder}</td>
+                  <td className="py-1.5 text-right text-ink">{h.pct_held != null ? `${h.pct_held.toFixed(2)}%` : '—'}</td>
+                  <td className="py-1.5 text-right text-ink">
+                    {h.shares != null ? (h.shares >= 1e6 ? `${(h.shares / 1e6).toFixed(1)}M` : h.shares.toLocaleString()) : '—'}
+                  </td>
+                  <td className={`py-1.5 text-right font-semibold ${h.pct_change == null ? 'text-ink-faint' : h.pct_change > 0 ? 'text-green-600' : h.pct_change < 0 ? 'text-red-500' : 'text-ink-muted'}`}>
+                    {h.pct_change != null ? `${h.pct_change > 0 ? '+' : ''}${h.pct_change.toFixed(1)}%` : '—'}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
   )
 }
 
@@ -2696,13 +2723,18 @@ export function StockAnalysisPage() {
             })()}
             </Section>
 
-            {/* Analyst consensus — full width, prominent placement */}
-            {result.analyst && (result.analyst.recommendation || result.analyst.target_mean) && (
-              <AnalystPanel
-                analyst={result.analyst}
-                currentPrice={result.technical?.current_price ?? null}
-                currency={currency}
-              />
+            {/* Analyst consensus + institutional buying/selling — its own panel */}
+            {((result.analyst && (result.analyst.recommendation || result.analyst.target_mean)) || result.institutional) && (
+              <Section title="Analyst & institutional activity" subtitle="consensus, price targets & smart-money buying/selling" defaultOpen>
+                {result.analyst && (result.analyst.recommendation || result.analyst.target_mean) && (
+                  <AnalystPanel
+                    analyst={result.analyst}
+                    currentPrice={result.technical?.current_price ?? null}
+                    currency={currency}
+                  />
+                )}
+                {result.institutional && <InstitutionalPanel inst={result.institutional} />}
+              </Section>
             )}
 
             {/* Fundamentals, ownership & filings — collapsed reference detail */}
@@ -2815,95 +2847,6 @@ export function StockAnalysisPage() {
                       </div>
                     )}
                   </div>
-                </div>
-              )
-            })()}
-
-            {/* Institutional Ownership */}
-            {result.institutional && (() => {
-              const inst = result.institutional!
-              const sig = inst.top10_signal
-              return (
-                <div className="bg-surface rounded-xl border border-surface-border p-4">
-                  <div className="text-sm font-semibold text-ink mb-3">Institutional Ownership</div>
-
-                  {/* Summary banner */}
-                  {sig && sig !== 'mixed' && (
-                    <div className={`flex items-center gap-2 rounded-lg px-3 py-2 mb-3 text-xs border ${
-                      sig === 'buying'
-                        ? 'bg-green-50 dark:bg-green-900/20 border-green-300 dark:border-green-700 text-green-800 dark:text-green-300'
-                        : 'bg-red-50 dark:bg-red-900/20 border-red-300 dark:border-red-700 text-red-800 dark:text-red-300'
-                    }`}>
-                      <span>{sig === 'buying' ? '↑' : '↓'}</span>
-                      <span>
-                        {sig === 'buying'
-                          ? `${inst.top10_buyers} of top 10 holders increased position last quarter`
-                          : `${inst.top10_sellers} of top 10 holders reduced position last quarter`}
-                      </span>
-                    </div>
-                  )}
-
-                  {/* Stats row */}
-                  <div className="divide-y divide-surface-border/60 mb-3">
-                    {inst.inst_pct_held != null && (
-                      <div className="flex justify-between items-center py-2">
-                        <span className="text-sm text-ink-muted">Institutions Hold</span>
-                        <span className="text-sm font-semibold text-ink">{(inst.inst_pct_held * 100).toFixed(1)}%</span>
-                      </div>
-                    )}
-                    {inst.insider_pct_held != null && (
-                      <div className="flex justify-between items-center py-2">
-                        <span className="text-sm text-ink-muted">Insider Hold</span>
-                        <span className="text-sm font-semibold text-ink">{(inst.insider_pct_held * 100).toFixed(1)}%</span>
-                      </div>
-                    )}
-                    {inst.inst_count != null && (
-                      <div className="flex justify-between items-center py-2">
-                        <span className="text-sm text-ink-muted">Institution Count</span>
-                        <span className="text-sm font-semibold text-ink">{inst.inst_count.toLocaleString()}</span>
-                      </div>
-                    )}
-                    {inst.top10_buyers != null && (
-                      <div className="flex justify-between items-center py-2">
-                        <span className="text-sm text-ink-muted">Top 10 — Last Quarter</span>
-                        <span className="text-sm font-semibold">
-                          <span className="text-green-600">{inst.top10_buyers} buying</span>
-                          <span className="text-ink-muted mx-1">·</span>
-                          <span className="text-red-500">{inst.top10_sellers} selling</span>
-                        </span>
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Top holders table */}
-                  {inst.top_holders?.length > 0 && (
-                    <div className="overflow-x-auto">
-                      <table className="w-full text-xs">
-                        <thead>
-                          <tr className="text-ink-faint border-b border-surface-border">
-                            <th className="text-left py-1.5 font-medium">Holder</th>
-                            <th className="text-right py-1.5 font-medium">% Held</th>
-                            <th className="text-right py-1.5 font-medium">Shares</th>
-                            <th className="text-right py-1.5 font-medium">Q Change</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {inst.top_holders.map((h, i) => (
-                            <tr key={i} className="border-b border-surface-border/40 last:border-0">
-                              <td className="py-1.5 text-ink-muted max-w-[160px] truncate pr-2">{h.holder}</td>
-                              <td className="py-1.5 text-right text-ink">{h.pct_held != null ? `${h.pct_held.toFixed(2)}%` : '—'}</td>
-                              <td className="py-1.5 text-right text-ink">
-                                {h.shares != null ? (h.shares >= 1e6 ? `${(h.shares / 1e6).toFixed(1)}M` : h.shares.toLocaleString()) : '—'}
-                              </td>
-                              <td className={`py-1.5 text-right font-semibold ${h.pct_change == null ? 'text-ink-faint' : h.pct_change > 0 ? 'text-green-600' : h.pct_change < 0 ? 'text-red-500' : 'text-ink-muted'}`}>
-                                {h.pct_change != null ? `${h.pct_change > 0 ? '+' : ''}${h.pct_change.toFixed(1)}%` : '—'}
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  )}
                 </div>
               )
             })()}
