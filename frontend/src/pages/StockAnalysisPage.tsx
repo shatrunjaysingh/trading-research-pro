@@ -1386,6 +1386,17 @@ const COMPOSITE_INFO = 'A single 0–100 rating blending six factors — momentu
 const CONVICTION_INFO = 'How much to trust the rating — NOT how bullish it is. High only when the six factors agree and the score sits clearly inside a band. Low means the signals conflict, so treat the rating with caution.'
 const FACTOR_INFO = "Each bar is this stock's percentile rank on that factor (0–100). Green ≥70 = strong (top tier), blue 50–69 = above average, yellow 30–49 = below average, red under 30 = weak (bottom tier)."
 
+// Plain-English reading of each factor when it's strong (hi) vs weak (lo) —
+// turns "Low Volatility 0th pct" into "Very high volatility", etc.
+const FACTOR_PLAIN: Record<string, { hi: string; lo: string }> = {
+  momentum:  { hi: 'Strong price momentum',   lo: 'Weak / falling momentum' },
+  quality:   { hi: 'High-quality business',   lo: 'Poor business quality' },
+  value:     { hi: 'Attractively valued',     lo: 'Expensive valuation' },
+  growth:    { hi: 'Strong growth',           lo: 'Weak growth' },
+  revisions: { hi: 'Analysts turning bullish', lo: 'Analysts turning bearish' },
+  low_vol:   { hi: 'Low, stable volatility',  lo: 'Very high volatility' },
+}
+
 // Financial-distress detection from the health metrics. Returns human-readable
 // reasons; a non-empty list surfaces the ⚠️ warning on the rating.
 function distressReasons(h: FinancialHealth | null | undefined): string[] {
@@ -1434,23 +1445,40 @@ function DecisionSummary({ result, onRefresh, currency = '$' }: { result: StockA
   }
   const convLabel = conviction >= 70 ? 'high conviction' : conviction >= 50 ? 'moderate conviction' : 'low conviction'
 
-  // Plain-English takeaway from the strongest & weakest factor family.
-  let takeaway = ''
+  // Split factors into plain-English strengths (top tier) and risks (bottom tier).
+  const strengths: string[] = []
+  const risks: string[] = []
   if (fa?.families) {
     const ranked = FACTOR_META
-      .map(m => ({ label: m.label, p: fa.families[m.key]?.percentile ?? null }))
-      .filter((x): x is { label: string; p: number } => x.p != null)
-      .sort((a, b) => b.p - a.p)
-    if (ranked.length) {
-      const top = ranked[0], bot = ranked[ranked.length - 1]
-      takeaway = `Strongest on ${top.label} (${top.p.toFixed(0)}th pct); weakest on ${bot.label} (${bot.p.toFixed(0)}th).`
-    }
+      .map(m => ({ key: m.key, p: fa.families[m.key]?.percentile ?? null }))
+      .filter((x): x is { key: string; p: number } => x.p != null)
+    ranked.filter(x => x.p >= 60).sort((a, b) => b.p - a.p)
+      .forEach(x => strengths.push(`${FACTOR_PLAIN[x.key]?.hi ?? x.key} (${x.p.toFixed(0)})`))
+    ranked.filter(x => x.p <= 40).sort((a, b) => a.p - b.p)
+      .forEach(x => risks.push(`${FACTOR_PLAIN[x.key]?.lo ?? x.key} (${x.p.toFixed(0)})`))
   }
+  const distressed = distress.length > 0
+  if (distressed) risks.unshift('Financial distress (see below)')
+
+  // One plain-English verdict sentence.
+  const convClause = conviction < 50 ? ' Signals conflict, so conviction is low.'
+    : conviction >= 70 ? ' The factors broadly agree.' : ''
+  const verdict = distressed
+    ? `High-risk ${SIGNAL_LABEL[signal]} — a momentum move on a financially distressed company. Treat as speculative only.${convClause}`
+    : ({
+        buy:   'Attractive across most factors — a genuine leader.',
+        watch: 'Constructive, but not decisive yet — worth watching.',
+        hold:  'A middling setup with no clear edge either way.',
+        sell:  'Weak across the factors — better opportunities elsewhere.',
+      } as Record<string, string>)[signal] + convClause
+
+  // Rating gauge: marker position + zone boundaries (Sell<38, Hold<52, Watch<65, Buy).
+  const markerPct = Math.max(0, Math.min(100, composite))
 
   return (
-    <div className={clsx('rounded-2xl border bg-gradient-to-r p-5', bg[signal])}>
-      <div className="flex items-center justify-between gap-4 flex-wrap">
-        {/* Ticker + company + price */}
+    <div className={clsx('rounded-2xl border bg-gradient-to-r p-5 space-y-4', bg[signal])}>
+      {/* Header: ticker / price / company */}
+      <div className="flex items-start justify-between gap-4 flex-wrap">
         <div className="min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
             <h2 className="text-2xl font-extrabold text-ink tracking-tight">{result.ticker}</h2>
@@ -1469,35 +1497,61 @@ function DecisionSummary({ result, onRefresh, currency = '$' }: { result: StockA
             <CacheBadge result={result} onRefresh={onRefresh} />
           </div>
         </div>
-
-        {/* The rating */}
-        <div className="flex items-center gap-5 shrink-0">
-          <div className="text-center">
-            <div className="text-4xl font-black text-ink leading-none">{composite.toFixed(0)}</div>
-            <div className="flex items-center justify-center gap-1 text-[10px] text-ink-faint uppercase tracking-wide mt-1">
-              Rating /100 <InfoTooltip text={COMPOSITE_INFO} align="right" />
-            </div>
-          </div>
-          <div className="text-center">
-            <span className={clsx('inline-block px-4 py-2 rounded-xl text-lg font-black uppercase tracking-wider', pill[signal])}>
-              {SIGNAL_LABEL[signal]}
-            </span>
-            <div className="flex items-center justify-center gap-1 text-[11px] text-ink-muted mt-1">
-              {conviction.toFixed(0)}% · {convLabel} <InfoTooltip text={CONVICTION_INFO} align="right" />
-            </div>
+        <div className="text-center shrink-0">
+          <span className={clsx('inline-block px-4 py-2 rounded-xl text-lg font-black uppercase tracking-wider', pill[signal])}>
+            {SIGNAL_LABEL[signal]}
+          </span>
+          <div className="flex items-center justify-center gap-1 text-[11px] text-ink-muted mt-1">
+            {conviction.toFixed(0)}% · {convLabel} <InfoTooltip text={CONVICTION_INFO} align="right" />
           </div>
         </div>
       </div>
 
-      {/* Financial-distress warning — shown when Altman-Z / Piotroski etc. flag risk */}
-      {distress.length > 0 && (
-        <div className="mt-3 flex items-start gap-2 rounded-lg bg-red-50 dark:bg-red-900/20 border border-red-300 dark:border-red-700 px-3 py-2 text-xs text-red-700 dark:text-red-300">
-          <span className="mt-0.5">⚠️</span>
-          <span><strong>Financial distress signals:</strong> {distress.join(' · ')}. Momentum may be a speculative bounce — the deeper factors are flashing caution.</span>
+      {/* Verdict sentence — the human takeaway */}
+      <p className="text-sm font-medium text-ink leading-snug">{verdict}</p>
+
+      {/* Rating gauge */}
+      <div>
+        <div className="flex items-center gap-1 text-[10px] text-ink-faint uppercase tracking-wide mb-1">
+          Rating {composite.toFixed(0)}/100 <InfoTooltip text={COMPOSITE_INFO} align="left" />
+        </div>
+        <div className="relative h-2.5 rounded-full bg-gradient-to-r from-red-500 via-yellow-400 to-green-500">
+          <div className="absolute -top-1 w-1 bg-ink rounded-full shadow" style={{ left: `calc(${markerPct}% - 2px)`, height: '1.15rem' }} />
+        </div>
+        <div className="flex justify-between text-[9px] text-ink-faint mt-1">
+          <span>Sell</span><span>Hold</span><span>Watch</span><span>Buy</span>
+        </div>
+      </div>
+
+      {/* Strengths vs Risks — plain English */}
+      {(strengths.length > 0 || risks.length > 0) && (
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-1">
+          <div>
+            <div className="text-[10px] font-bold uppercase tracking-wider text-green-600 dark:text-green-400 mb-1.5">✓ Strengths</div>
+            {strengths.length ? (
+              <ul className="space-y-1">
+                {strengths.map((s, i) => <li key={i} className="text-xs text-ink-muted flex gap-1.5"><span className="text-green-500">•</span>{s}</li>)}
+              </ul>
+            ) : <p className="text-xs text-ink-faint">No standout strengths</p>}
+          </div>
+          <div>
+            <div className="text-[10px] font-bold uppercase tracking-wider text-red-500 dark:text-red-400 mb-1.5">⚠ Risks</div>
+            {risks.length ? (
+              <ul className="space-y-1">
+                {risks.map((r, i) => <li key={i} className="text-xs text-ink-muted flex gap-1.5"><span className="text-red-400">•</span>{r}</li>)}
+              </ul>
+            ) : <p className="text-xs text-ink-faint">No major red flags</p>}
+          </div>
         </div>
       )}
 
-      {takeaway && <p className="text-xs text-ink-muted mt-3 pt-3 border-t border-black/5 dark:border-white/10">{takeaway}</p>}
+      {/* Financial-distress detail (when flagged) */}
+      {distressed && (
+        <div className="flex items-start gap-2 rounded-lg bg-red-50 dark:bg-red-900/20 border border-red-300 dark:border-red-700 px-3 py-2 text-xs text-red-700 dark:text-red-300">
+          <span className="mt-0.5">⚠️</span>
+          <span><strong>Distress signals:</strong> {distress.join(' · ')}</span>
+        </div>
+      )}
     </div>
   )
 }
