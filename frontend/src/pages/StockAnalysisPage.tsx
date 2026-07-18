@@ -1320,7 +1320,7 @@ function FactorPanel({ fa }: { fa: FactorAnalysis | null | undefined }) {
 
 // ── Financial Health strip (Piotroski, Altman-Z, ROIC, FCF) ───────────────────
 
-function FinancialHealthStrip({ h }: { h: FinancialHealth | null | undefined }) {
+function FinancialHealthStrip({ h, inline = false }: { h: FinancialHealth | null | undefined; inline?: boolean }) {
   if (!h) return null
   const has = [h.piotroski, h.altman_z, h.roic, h.fcf_yield, h.fcf_conversion, h.revision_score]
     .some((v) => v != null)
@@ -1366,6 +1366,9 @@ function FinancialHealthStrip({ h }: { h: FinancialHealth | null | undefined }) 
       h.revision_score > 0 ? 'good' : 'bad',
       'Net analyst upgrades − downgrades (estimate momentum)'))
 
+  if (inline) {
+    return <div className="flex flex-wrap gap-2">{chips}</div>
+  }
   return (
     <div className="space-y-2">
       <div className="text-xs font-bold text-ink-faint uppercase tracking-widest px-1">Financial Health</div>
@@ -1373,6 +1376,124 @@ function FinancialHealthStrip({ h }: { h: FinancialHealth | null | undefined }) 
         {chips}
       </div>
     </div>
+  )
+}
+
+// ── Decision Summary (consolidated hero) ──────────────────────────────────────
+
+function DecisionSummary({ result, onRefresh, currency = '$' }: { result: StockAnalysisResult; onRefresh: () => void; currency?: string }) {
+  const tech = result.technical
+  const fa   = result.factor_analysis
+  const rs   = result.rs_rating
+  const st   = result.st_analysis
+  const lt   = result.lt_analysis
+
+  // Headline decision: prefer the institutional factor composite; fall back to
+  // the momentum score. One number, one signal — not five competing cards.
+  const composite  = fa?.composite ?? tech?.score ?? 50
+  const conviction = fa?.conviction ?? tech?.confidence ?? 0
+  const signal = composite >= 65 ? 'buy' : composite >= 52 ? 'watch' : composite >= 38 ? 'hold' : 'sell'
+
+  const pill: Record<string, string> = {
+    buy: 'bg-green-600 text-white', watch: 'bg-blue-600 text-white',
+    hold: 'bg-yellow-500 text-white', sell: 'bg-red-600 text-white',
+  }
+  const bg: Record<string, string> = {
+    buy:   'from-green-50 to-emerald-50 border-green-200 dark:from-green-900/20 dark:to-emerald-900/20 dark:border-green-800',
+    watch: 'from-blue-50 to-cyan-50 border-blue-200 dark:from-blue-900/20 dark:to-cyan-900/20 dark:border-blue-800',
+    hold:  'from-yellow-50 to-amber-50 border-yellow-200 dark:from-yellow-900/20 dark:to-amber-900/20 dark:border-yellow-800',
+    sell:  'from-red-50 to-pink-50 border-red-200 dark:from-red-900/20 dark:to-pink-900/20 dark:border-red-800',
+  }
+  const pctColor = (p: number | null) =>
+    p == null ? 'bg-surface-muted' : p >= 70 ? 'bg-green-500' : p >= 50 ? 'bg-blue-500' : p >= 30 ? 'bg-yellow-500' : 'bg-red-500'
+  const convColor = conviction >= 70 ? 'text-green-600 dark:text-green-400'
+    : conviction >= 50 ? 'text-yellow-600 dark:text-yellow-400' : 'text-red-500 dark:text-red-400'
+
+  return (
+    <div className={clsx('rounded-2xl border bg-gradient-to-r p-5 space-y-4', bg[signal])}>
+      {/* Header: ticker / company / price */}
+      <div className="flex items-start justify-between gap-4 flex-wrap">
+        <div className="min-w-0">
+          <div className="flex items-center gap-3 flex-wrap">
+            <h2 className="text-3xl font-extrabold text-ink tracking-tight">{result.ticker}</h2>
+            <span className={clsx('px-3 py-1 rounded-full text-sm font-bold uppercase tracking-wider', pill[signal])}>{signal}</span>
+          </div>
+          {result.company_name && <p className="text-ink-muted text-sm mt-1">{result.company_name}</p>}
+          <div className="mt-2 flex items-center gap-3 flex-wrap">
+            <WatchlistButton ticker={result.ticker} />
+            <CacheBadge result={result} onRefresh={onRefresh} />
+          </div>
+        </div>
+        {tech?.current_price != null && (
+          <div className="text-right shrink-0">
+            <div className="text-2xl font-extrabold text-ink">{currency}{tech.current_price.toFixed(2)}</div>
+            <div className={clsx('text-sm font-semibold', chgColor(tech.day_change_pct))}>
+              {tech.day_change_pct != null ? `${tech.day_change_pct >= 0 ? '+' : ''}${tech.day_change_pct.toFixed(2)}%` : '—'}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Decision numbers */}
+      <div className="flex items-center gap-6 rounded-xl bg-white/50 dark:bg-white/5 px-4 py-3">
+        <div>
+          <div className="text-3xl font-extrabold text-ink leading-none">{composite.toFixed(0)}<span className="text-sm text-ink-faint">/100</span></div>
+          <div className="text-xs text-ink-muted mt-0.5">Composite</div>
+        </div>
+        <div className="w-px h-9 bg-surface-border" />
+        <div>
+          <div className={clsx('text-3xl font-extrabold leading-none', convColor)}>{conviction.toFixed(0)}%</div>
+          <div className="text-xs text-ink-muted mt-0.5">Conviction</div>
+        </div>
+        {fa && (
+          <div className="text-[10px] text-ink-faint ml-auto self-end text-right">
+            {fa.basis === 'cross-sectional' ? `ranked vs ${fa.universe_n ?? '—'} peers` : 'baseline ranking'}
+          </div>
+        )}
+      </div>
+
+      {/* Factor percentile bars */}
+      {fa?.families && (
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-2">
+          {FACTOR_META.map(({ key, label, desc }) => {
+            const p = fa.families[key]?.percentile ?? null
+            return (
+              <div key={key} className="flex items-center gap-2" title={desc}>
+                <span className="text-xs text-ink-muted w-32 shrink-0">{label}</span>
+                <div className="h-2 flex-1 bg-surface-muted rounded-full overflow-hidden">
+                  <div className={clsx('h-full rounded-full', pctColor(p))} style={{ width: `${p ?? 0}%` }} />
+                </div>
+                <span className="text-xs font-bold text-ink w-8 text-right">{p == null ? '—' : p.toFixed(0)}</span>
+              </div>
+            )
+          })}
+        </div>
+      )}
+
+      {/* Supporting metrics + financial-health chips */}
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-ink-muted">
+        {rs && <span>RS <strong className="text-ink">{rs.rs_score}</strong></span>}
+        {st && <span>Short-term <strong className="text-ink">{st.score.toFixed(0)}</strong> · {st.signal}</span>}
+        {lt && <span>Long-term <strong className="text-ink">{lt.score.toFixed(0)}</strong> · {lt.signal}</span>}
+        {result.weekly?.trend_w && <span>Weekly <strong className="text-ink">{result.weekly.trend_w === 'up' ? '↑ up' : '↓ down'}</strong></span>}
+      </div>
+      <FinancialHealthStrip h={result.financial_health} inline />
+    </div>
+  )
+}
+
+// ── Collapsible section wrapper (progressive disclosure) ──────────────────────
+
+function Section({ title, subtitle, children, defaultOpen = false }: { title: string; subtitle?: string; children: React.ReactNode; defaultOpen?: boolean }) {
+  return (
+    <details open={defaultOpen} className="group">
+      <summary className="flex items-center gap-2 cursor-pointer select-none list-none px-1 py-1.5 text-xs font-bold uppercase tracking-widest text-ink-faint hover:text-ink">
+        <span className="text-[10px] transition-transform group-open:rotate-90">▶</span>
+        <span>{title}</span>
+        {subtitle && <span className="normal-case tracking-normal font-normal text-ink-faint/70">· {subtitle}</span>}
+      </summary>
+      <div className="mt-2 space-y-4">{children}</div>
+    </details>
   )
 }
 
@@ -2333,36 +2454,9 @@ export function StockAnalysisPage() {
               </p>
             </div>
 
-            {/* Summary banner — signal + score + confidence at a glance */}
-            <ResultBanner result={result} onRefresh={() => handleRun(true)} currency={currency} />
-
-            {/* RS Rating + Horizon scores — most important decision metrics */}
-            <div className="flex flex-col sm:flex-row gap-3">
-              {result.rs_rating && <div className="flex-1"><RSRatingBadge rs={result.rs_rating} /></div>}
-              {(result.weekly?.trend_w) && (
-                <div className={clsx(
-                  'flex items-center gap-2 px-4 py-3 rounded-xl border text-sm font-medium flex-shrink-0',
-                  result.weekly.trend_w === 'up'
-                    ? 'bg-green-50 border-green-200 text-green-700 dark:bg-green-900/20 dark:border-green-700 dark:text-green-400'
-                    : 'bg-red-50 border-red-200 text-red-700 dark:bg-red-900/20 dark:border-red-700 dark:text-red-400'
-                )}>
-                  {result.weekly.trend_w === 'up' ? '📈' : '📉'}
-                  <span>Weekly trend: <strong>{result.weekly.trend_w === 'up' ? 'Uptrend' : 'Downtrend'}</strong></span>
-                  {result.weekly.macd_above_signal_w != null && (
-                    <span className="text-xs opacity-70">· MACD {result.weekly.macd_above_signal_w ? '▲' : '▼'}</span>
-                  )}
-                </div>
-              )}
-            </div>
-
-            {/* Short-term + Long-term horizon analysis */}
-            <HorizonPanel st={result.st_analysis} lt={result.lt_analysis} />
-
-            {/* Institutional cross-sectional factor decomposition */}
-            <FactorPanel fa={result.factor_analysis} />
-
-            {/* Financial-health metrics (Piotroski, Altman-Z, ROIC, FCF) */}
-            <FinancialHealthStrip h={result.financial_health} />
+            {/* One consolidated decision hero: signal + composite + conviction +
+                factor breakdown + key metrics + financial health, in a single card. */}
+            <DecisionSummary result={result} onRefresh={() => handleRun(true)} currency={currency} />
 
             {/* Final Verdict — admin-only AI judgement with price targets */}
             {isAdmin && (result.st_analysis || result.lt_analysis) && (
@@ -2378,6 +2472,8 @@ export function StockAnalysisPage() {
               currency={currency}
             />
 
+            {/* Technical detail — collapsed by default (progressive disclosure) */}
+            <Section title="Technical detail" subtitle="indicators, patterns, regime & sizing">
             {/* Technical */}
             {result.technical && (
               <TechnicalPanel
@@ -2448,6 +2544,7 @@ export function StockAnalysisPage() {
                 </div>
               )
             })()}
+            </Section>
 
             {/* Analyst consensus — full width, prominent placement */}
             {result.analyst && (result.analyst.recommendation || result.analyst.target_mean) && (
@@ -2458,6 +2555,8 @@ export function StockAnalysisPage() {
               />
             )}
 
+            {/* Fundamentals, ownership & filings — collapsed reference detail */}
+            <Section title="Fundamentals, ownership & filings" subtitle="statements, holders, SEC filings, corporate actions">
             {/* Corporate Actions */}
             {result.fundamentals && (() => {
               const f = result.fundamentals!
@@ -2773,6 +2872,7 @@ export function StockAnalysisPage() {
                 {result.ai_analysis  && <AIAnalysisPanel  text={result.ai_analysis}  />}
               </div>
             )}
+            </Section>
 
             {/* Stock chatbot */}
             <StockChatPanel result={result} currency={currency} />
