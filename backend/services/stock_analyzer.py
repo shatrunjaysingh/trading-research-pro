@@ -1205,7 +1205,7 @@ def _apply_stabilization(ticker: str, tech: dict, result: dict) -> None:
         agreements = {"tech": tech.get("agreement", 0.5)}
 
         try:
-            prior_rows = db.get_recent_signal_history(ticker, lookback_days=10)
+            prior_rows = db.get_recent_signal_history(ticker, lookback_days=10, before=date.today())
         except Exception:
             prior_rows = []
 

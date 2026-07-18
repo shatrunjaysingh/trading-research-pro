@@ -118,6 +118,18 @@ def build_universe(config: dict, stocks_only: bool, crypto_only: bool) -> tuple[
 # Technical indicator helpers (shared with free-mode scoring)
 # ---------------------------------------------------------------------------
 
+def _num(v) -> float | None:
+    """yfinance value → float or None (guards None/NaN/blank strings)."""
+    if v is None:
+        return None
+    try:
+        import math as _m
+        f = float(v)
+        return None if _m.isnan(f) else f
+    except (TypeError, ValueError):
+        return None
+
+
 def _rsi(closes: list, period: int = 14) -> float | None:
     if len(closes) < period + 1:
         return None
@@ -411,6 +423,8 @@ def _score_asset(asset: dict, spy_return_3m: float,
     recommendation_mean = 3.0   # 1=strong_buy … 5=sell
     num_analysts        = 0
     recommendation_key  = "Hold"
+    # Value/quality fundamentals for the cross-sectional factor engine
+    roe_val = margin_val = de_val = curr_ratio_val = fwd_pe_val = beta_val = None
 
     try:
         info             = tk.info
@@ -429,6 +443,12 @@ def _score_asset(asset: dict, spy_return_3m: float,
         num_analysts        = int(info.get("numberOfAnalystOpinions")   or 0)
         rec_raw             = info.get("recommendationKey") or "hold"
         recommendation_key  = rec_raw.replace("_", " ").title()
+        roe_val        = _num(info.get("returnOnEquity"))
+        margin_val     = _num(info.get("profitMargins"))
+        de_val         = _num(info.get("debtToEquity"))
+        curr_ratio_val = _num(info.get("currentRatio"))
+        fwd_pe_val     = _num(info.get("forwardPE"))
+        beta_val       = _num(info.get("beta"))
 
         week_end = today + timedelta(days=7)
         cal = tk.calendar
@@ -742,7 +762,14 @@ def _score_asset(asset: dict, spy_return_3m: float,
 
     all_sub    = [mom_3m, mom_1m, mom_1w, mom_1d, vol_scr, rs_spy, rs_sector,
                   pos_scr, earn_qual_scr, short_scr, sent_scr, analyst_score, insider_score]
-    confidence = round(sum(1 for s in all_sub if s > 50) / len(all_sub) * 100)
+    # Honest conviction: how one-sided the sub-scores are (breadth) combined with
+    # how far the composite sits from neutral (magnitude). Replaces the old
+    # "fraction of sub-scores > 50" which read high even for a coin-flip 51.
+    _net       = sum(1 if s > 55 else -1 if s < 45 else 0 for s in all_sub)
+    _breadth   = abs(_net) / len(all_sub)                 # 0..1 agreement
+    _magnitude = min(abs(score - 50) / 30.0, 1.0)         # 0..1 conviction
+    agreement  = round(_breadth, 3)
+    confidence = round(100 * (0.6 * _breadth + 0.4 * _magnitude))
 
     # ── ATR proxy for position sizing (1-week volatility × 1.5) ───────────────
     atr_pct_est = max(abs(week_chg_pct) * 1.5, 0.5)  # rough ATR estimate as % of price
@@ -813,12 +840,23 @@ def _score_asset(asset: dict, spy_return_3m: float,
         # SEC EDGAR
         "sec_insider_summary":  sec_insider_summary,
         "sec_recent_filings":   sec_recent_filings,
+        # value/quality fundamentals (for the cross-sectional factor engine)
+        "forward_pe":          fwd_pe_val,
+        "return_on_equity":    roe_val,
+        "profit_margin":       margin_val,
+        "debt_to_equity":      de_val,
+        "current_ratio":       curr_ratio_val,
+        "beta":                beta_val,
+        "recommendation_mean": recommendation_mean,
+        "eps_growth":          eps_growth,
+        "revenue_growth":      rev_growth,
         # score fields
         "raw_score":           raw_score,
         "regime_multiplier":   multiplier,
         "score":               score,
         "signal":              signal,
         "confidence":          confidence,
+        "agreement":           agreement,
         "breakout_flag":       pos_52w >= 0.95,
         "squeeze_flag":        squeeze_flag,
         "earnings_flag":       earnings_flag,
@@ -881,7 +919,87 @@ def fetch_all_data(stocks: list, crypto: list) -> list:
             except Exception as exc:
                 logger.warning("Skipping %s: %s", asset["ticker"], exc)
 
+    _enrich_research_rows(rows)
     return rows
+
+
+def _research_factor_data(row: dict) -> dict:
+    """Map a research row's fields onto the factor-engine's expected keys."""
+    return {
+        "month_change_pct":   row.get("month_change_pct"),
+        "pos_52w_pct":        row.get("pos_52w"),
+        "current_price":      row.get("current_price"),
+        "sma200":             row.get("sma200"),
+        "rs_score":           row.get("rs_vs_spy"),        # relative-strength proxy (batch-ranked)
+        "forward_pe":         row.get("forward_pe"),
+        "return_on_equity":   row.get("return_on_equity"),
+        "profit_margin":      row.get("profit_margin"),
+        "debt_to_equity":     row.get("debt_to_equity"),
+        "current_ratio":      row.get("current_ratio"),
+        "eps_growth":         row.get("eps_growth"),
+        "revenue_growth":     row.get("revenue_growth"),
+        "beta":               row.get("beta"),
+        "atr_pct":            row.get("atr_pct"),
+        "upside_pct":         row.get("analyst_upside_pct"),
+        "recommendation_mean": row.get("recommendation_mean"),
+        "eps_surprise_pct":   row.get("eps_surprise_pct"),
+        "short_pct_float":    row.get("short_pct_float"),
+    }
+
+
+def _enrich_research_rows(rows: list) -> None:
+    """
+    Post-process the scored universe (main thread, no per-asset DB access):
+      1. Rank each stock's factors cross-sectionally *within this batch* and
+         attach `factor_analysis` (same decomposition as the analysis page).
+      2. Smooth + hysteresis-gate the composite via the shared stabilizer so the
+         research signal stops flip-flopping day to day, and replace the score/
+         signal/confidence with the stabilized values.
+    """
+    stock_rows = [r for r in rows if r.get("type") == "stock"]
+    if not stock_rows:
+        return
+    try:
+        from backend.services import factor_engine as fe
+        from backend.services.signal_stabilizer import stabilize
+        import database as db
+        from datetime import date
+
+        # 1. Cross-sectional factor decomposition ranked within the batch.
+        data_by_ticker = {r["ticker"]: _research_factor_data(r) for r in stock_rows}
+        exp_rows = [fe.compute_exposures(d) for d in data_by_ticker.values()]
+        batch_stats = fe.accumulate_universe_stats(exp_rows) if len(exp_rows) >= 10 else None
+        for r in stock_rows:
+            try:
+                r["factor_analysis"] = fe.analyze(data_by_ticker[r["ticker"]], universe_stats=batch_stats)
+            except Exception:
+                r["factor_analysis"] = None
+
+        # 2. Stabilize the composite (research kind) against prior days.
+        today = date.today()
+        tickers = [r["ticker"] for r in stock_rows]
+        try:
+            hist = db.get_recent_signal_history_bulk(tickers, lookback_days=10, before=today)
+        except Exception:
+            hist = {}
+        signal_rows = []
+        for r in stock_rows:
+            prior = hist.get(r["ticker"].upper()) or []
+            stab = stabilize(prior, {"research": float(r["score"])},
+                             {"research": r.get("agreement", 0.5)})
+            r["raw_score"] = int(round(r["score"]))
+            if stab.get("research_smoothed") is not None:
+                r["score"] = int(round(stab["research_smoothed"]))
+                r["signal"] = stab["research_signal"] or r["signal"]
+                r["confidence"] = int(round(stab.get("research_confidence") or r["confidence"]))
+                r["signal_changed"] = stab.get("research_changed", False)
+            signal_rows.append({"ticker": r["ticker"], **stab})
+        try:
+            db.upsert_signal_history_bulk([{"as_of": today, **s} for s in signal_rows])
+        except Exception as exc:
+            logger.warning("Research signal_history upsert failed: %s", exc)
+    except Exception as exc:
+        logger.warning("Research enrichment failed: %s", exc)
 
 
 def fetch_cheap_stocks(max_price: float = 5.0, min_market_cap: int = 50_000_000, limit: int = 50) -> list:

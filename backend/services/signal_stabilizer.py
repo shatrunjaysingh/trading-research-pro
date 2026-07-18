@@ -47,6 +47,11 @@ BANDS_5 = [
     (38.0, "hold"),
     (float("-inf"), "sell"),
 ]
+# Research/screener composite uses a 3-level uppercase vocabulary (see research.py).
+BANDS_RESEARCH = [(65.0, "BUY"), (45.0, "WATCH"), (float("-inf"), "HOLD")]
+
+# Kinds that carry a headline confidence number.
+CONFIDENCE_KINDS = {"tech", "research"}
 
 
 def _band_of(score: float, bands: list[tuple[float, str]]) -> int:
@@ -147,9 +152,13 @@ def stabilize(
         "tech": BANDS_4,
         "st": BANDS_5,
         "lt": BANDS_5,
+        "research": BANDS_RESEARCH,
     }
 
     for kind, bands in specs.items():
+        # Only stabilize kinds the caller actually provided a raw score for.
+        if kind not in raw_scores:
+            continue
         raw = raw_scores.get(kind)
         out[f"{kind}_raw"] = round(raw, 2) if raw is not None else None
 
@@ -157,8 +166,8 @@ def stabilize(
             out[f"{kind}_smoothed"] = prev.get(f"{kind}_smoothed")
             out[f"{kind}_signal"] = prev.get(f"{kind}_signal")
             out[f"{kind}_changed"] = False
-            if kind == "tech":
-                out["tech_confidence"] = prev.get("tech_confidence") or 10.0
+            if kind in CONFIDENCE_KINDS:
+                out[f"{kind}_confidence"] = prev.get(f"{kind}_confidence") or 10.0
             continue
 
         prev_smoothed = prev.get(f"{kind}_smoothed")
@@ -170,15 +179,15 @@ def stabilize(
         out[f"{kind}_signal"] = signal
         out[f"{kind}_changed"] = bool(prev_signal and prev_signal != signal)
 
-        if kind == "tech":
+        if kind in CONFIDENCE_KINDS:
             recent = [
-                r.get("tech_smoothed")
+                r.get(f"{kind}_smoothed")
                 for r in prior_rows[:CONSISTENCY_LOOKBACK]
-                if r.get("tech_smoothed") is not None
+                if r.get(f"{kind}_smoothed") is not None
             ]
             recent = [smoothed] + recent
-            out["tech_confidence"] = _confidence(
-                smoothed, agreements.get("tech", 0.5), recent, bands
+            out[f"{kind}_confidence"] = _confidence(
+                smoothed, agreements.get(kind, 0.5), recent, bands
             )
 
     return out

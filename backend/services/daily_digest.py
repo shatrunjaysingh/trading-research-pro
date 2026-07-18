@@ -156,7 +156,7 @@ def run_daily_digest(force: bool = False) -> dict:
         # Pre-fetch signal history for the whole universe in ONE query (main
         # thread) so worker threads never hit the DB pool during scoring.
         try:
-            history_map = db.get_recent_signal_history_bulk(universe, lookback_days=10)
+            history_map = db.get_recent_signal_history_bulk(universe, lookback_days=10, before=today)
         except Exception as exc:
             logger.warning("Signal history prefetch failed: %s", exc)
             history_map = {}

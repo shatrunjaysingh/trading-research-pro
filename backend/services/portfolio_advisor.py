@@ -107,8 +107,16 @@ def _recommend_action(
     return {"action": "hold", "confidence": "medium", "reasons": reasons}
 
 
-def _score_one_holding(holding: dict, spy_returns: dict) -> dict | None:
-    """Score a single holding. Returns None on failure."""
+def _score_one_holding(
+    holding: dict, spy_returns: dict,
+    prior_rows: list[dict] | None = None, universe_stats: dict | None = None,
+) -> dict | None:
+    """Score a single holding. Returns None on failure.
+
+    `prior_rows` / `universe_stats` are pre-fetched once by the caller so the
+    per-holding scoring can be stabilized (smoothing + hysteresis) and ranked
+    cross-sectionally — the same engine the stock-analysis page uses.
+    """
     ticker = holding["ticker"]
     try:
         from backend.services.rs_rating import compute_rs_rating
@@ -116,6 +124,9 @@ def _score_one_holding(holding: dict, spy_returns: dict) -> dict | None:
             _fetch_stock_data, _compute_weekly_confirmation,
             _compute_st_score, _compute_lt_score, _fetch_fundamentals,
         )
+        from backend.services import factor_engine as fe
+        from backend.services.financial_health import get_financial_health
+        from backend.services.signal_stabilizer import stabilize
         import yfinance as yf
 
         tech_result = _fetch_stock_data(ticker, "3mo", "1d",
@@ -146,6 +157,34 @@ def _score_one_holding(holding: dict, spy_returns: dict) -> dict | None:
         pnl           = current_value - cost_basis
         pnl_pct       = round(pnl / cost_basis * 100, 2) if cost_basis else None
 
+        # ── Stabilize ST/LT (no day-to-day flip-flop) ─────────────────────────
+        row = stabilize(
+            prior_rows or [],
+            {"tech": tech.get("raw_score", 50.0),
+             "st": st["score"], "lt": lt["score"] if lt else None},
+            {"tech": tech.get("agreement", 0.5)},
+        )
+        st_score  = row["st_smoothed"] if row.get("st_smoothed") is not None else st["score"]
+        st_signal = row["st_signal"] or st["signal"]
+        lt_score  = row.get("lt_smoothed") if lt else None
+        lt_signal = row.get("lt_signal") if lt else None
+
+        # ── Cross-sectional factor decomposition + financial health ───────────
+        health = {}
+        factor_analysis = None
+        try:
+            health = get_financial_health(ticker)
+            analyst_min = {
+                "upside_pct": (round((_safe(info.get("targetMeanPrice")) - price) / price * 100, 1)
+                               if _safe(info.get("targetMeanPrice")) and price else None),
+                "recommendation_mean": _safe(info.get("recommendationMean")),
+            }
+            data = fe.merge_factor_data(tech, fund, analyst_min, rs_score)
+            data.update({k: v for k, v in health.items() if v is not None})
+            factor_analysis = fe.analyze(data, universe_stats=universe_stats)
+        except Exception:
+            pass
+
         return {
             "ticker":        ticker,
             "company":       info.get("shortName") or info.get("longName") or ticker,
@@ -160,12 +199,15 @@ def _score_one_holding(holding: dict, spy_returns: dict) -> dict | None:
             "pnl_pct":       pnl_pct,
             "weight":        0.0,  # filled in after we know total value
             "rs_score":      rs_score,
-            "st_score":      st["score"],
-            "st_signal":     st["signal"],
-            "lt_score":      lt["score"]   if lt else None,
-            "lt_signal":     lt["signal"]  if lt else None,
+            "st_score":      st_score,
+            "st_signal":     st_signal,
+            "lt_score":      lt_score,
+            "lt_signal":     lt_signal,
             "beta":          _safe(info.get("beta")) or 1.0,
             "earnings_soon": False,
+            "factor_analysis":  factor_analysis,
+            "financial_health": health or None,
+            "_signal_row":   {"ticker": ticker, **row},
         }
     except Exception as exc:
         logger.debug("Portfolio advisor failed for %s: %s", ticker, exc)
@@ -186,12 +228,32 @@ def analyze_saved_portfolio(user_id: int) -> dict:
 
     spy_returns = fetch_spy_returns()
 
+    # Pre-fetch signal history + the latest universe distribution ONCE (main
+    # thread) so worker threads stay off the DB and every holding is stabilized
+    # + ranked with the same engine the stock-analysis page uses.
+    from datetime import date
+    today = date.today()
+    tickers = [h["ticker"] for h in holdings]
+    try:
+        history_map = db.get_recent_signal_history_bulk(tickers, lookback_days=10, before=today)
+    except Exception:
+        history_map = {}
+    try:
+        uni = db.get_latest_factor_universe_stats()
+        universe_stats = (uni or {}).get("stats")
+    except Exception:
+        universe_stats = None
+
     # Score all holdings in parallel
     scored: list[dict] = []
     errors: list[dict] = []
 
     with ThreadPoolExecutor(max_workers=10) as ex:
-        futures = {ex.submit(_score_one_holding, h, spy_returns): h for h in holdings}
+        futures = {
+            ex.submit(_score_one_holding, h, spy_returns,
+                      history_map.get(h["ticker"].upper()), universe_stats): h
+            for h in holdings
+        }
         for f in as_completed(futures):
             h = futures[f]
             result = f.result()
@@ -204,6 +266,16 @@ def analyze_saved_portfolio(user_id: int) -> dict:
                     "avg_cost": h["avg_cost"],
                     "error":    "Could not score this ticker",
                 })
+
+    # Persist today's stabilized signal rows in one batch.
+    try:
+        rows = [s["_signal_row"] for s in scored if s.get("_signal_row")]
+        if rows:
+            db.upsert_signal_history_bulk([{"as_of": today, **r} for r in rows])
+    except Exception as exc:
+        logger.warning("Portfolio signal_history upsert failed: %s", exc)
+    for s in scored:
+        s.pop("_signal_row", None)
 
     # Compute portfolio weights
     total_value = sum(h["current_value"] for h in scored)

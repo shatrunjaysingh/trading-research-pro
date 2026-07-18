@@ -376,6 +376,13 @@ _SCHEMA_STATEMENTS = [
     )
     """,
     "CREATE INDEX IF NOT EXISTS idx_signal_hist_ticker ON signal_history(ticker, as_of DESC)",
+    # Research composite gets its own columns so the research/screener page and
+    # the digest/analysis writers can share a (ticker, as_of) row without one
+    # clobbering the other's signal (the upsert also COALESCEs).
+    "ALTER TABLE signal_history ADD COLUMN IF NOT EXISTS research_raw        NUMERIC(6,2)",
+    "ALTER TABLE signal_history ADD COLUMN IF NOT EXISTS research_smoothed   NUMERIC(6,2)",
+    "ALTER TABLE signal_history ADD COLUMN IF NOT EXISTS research_signal     TEXT",
+    "ALTER TABLE signal_history ADD COLUMN IF NOT EXISTS research_confidence NUMERIC(6,2)",
     # Daily cross-sectional factor distribution over the screening universe.
     # The digest writes one row/day (per-metric mean/std/n as JSONB); single-stock
     # analysis ranks a ticker's raw exposures against the latest row.
@@ -1515,6 +1522,7 @@ _SIGNAL_HIST_COLS = (
     "tech_raw", "tech_smoothed", "tech_signal", "tech_confidence",
     "st_raw", "st_smoothed", "st_signal",
     "lt_raw", "lt_smoothed", "lt_signal",
+    "research_raw", "research_smoothed", "research_signal", "research_confidence",
 )
 
 
@@ -1527,28 +1535,35 @@ def _signal_select_cols() -> str:
     return ", ".join(parts)
 
 
-def get_recent_signal_history(ticker: str, lookback_days: int = 10) -> list[dict]:
-    """Recent stored signal rows for one ticker, most-recent-first."""
+def get_recent_signal_history(
+    ticker: str, lookback_days: int = 10, before=None
+) -> list[dict]:
+    """Recent stored signal rows for one ticker, most-recent-first.
+
+    `before` (a date) excludes rows on/after it — pass today so smoothing uses
+    only prior days and re-running intraday doesn't double-count today's row.
+    """
     with get_db() as conn:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(
                 f"""SELECT as_of, {_signal_select_cols()}
                     FROM signal_history
-                    WHERE ticker = %s
+                    WHERE ticker = %s AND (%s IS NULL OR as_of < %s)
                     ORDER BY as_of DESC
                     LIMIT %s""",
-                (ticker.upper(), lookback_days),
+                (ticker.upper(), before, before, lookback_days),
             )
             return [dict(r) for r in cur.fetchall()]
 
 
 def get_recent_signal_history_bulk(
-    tickers: list[str], lookback_days: int = 10
+    tickers: list[str], lookback_days: int = 10, before=None
 ) -> dict[str, list[dict]]:
     """
     Recent signal rows for many tickers in a single query. Returns
     {ticker: [rows most-recent-first]}. Used by the daily digest so worker
     threads never touch the DB (avoids exhausting the connection pool).
+    `before` (a date) excludes rows on/after it (see get_recent_signal_history).
     """
     if not tickers:
         return {}
@@ -1562,11 +1577,11 @@ def get_recent_signal_history_bulk(
                         SELECT *, ROW_NUMBER() OVER (
                                    PARTITION BY ticker ORDER BY as_of DESC) AS rn
                         FROM signal_history
-                        WHERE ticker = ANY(%s)
+                        WHERE ticker = ANY(%s) AND (%s IS NULL OR as_of < %s)
                     ) s
                     WHERE rn <= %s
                     ORDER BY ticker, as_of DESC""",
-                (uppers, lookback_days),
+                (uppers, before, before, lookback_days),
             )
             for r in cur.fetchall():
                 out.setdefault(r["ticker"], []).append(dict(r))
@@ -1588,7 +1603,11 @@ def upsert_signal_history_bulk(rows: list[dict]) -> None:
     cols = ["ticker", "as_of", *_SIGNAL_HIST_COLS]
     placeholders = "(" + ", ".join(["%s"] * len(cols)) + ")"
     values = [tuple(r.get("ticker") if c == "ticker" else r.get(c) for c in cols) for r in rows]
-    updates = ", ".join(f"{c}=EXCLUDED.{c}" for c in _SIGNAL_HIST_COLS)
+    # COALESCE so a partial writer (e.g. research-only) preserves columns another
+    # writer (digest/analysis tech/st/lt) filled for the same (ticker, as_of).
+    updates = ", ".join(
+        f"{c}=COALESCE(EXCLUDED.{c}, signal_history.{c})" for c in _SIGNAL_HIST_COLS
+    )
     with get_db() as conn:
         cur = conn.cursor()
         psycopg2.extras.execute_values(
