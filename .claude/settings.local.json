@@ -109,7 +109,9 @@
       "Bash(PYTHONPATH=/Users/shatrunjaysingh/trading-agent python3 /private/tmp/claude-501/-Users-shatrunjaysingh-trading-agent/8765421f-3ca9-4f1a-beb8-40012e28acaf/scratchpad/send_digest.py)",
       "Bash(PYTHONPATH=/Users/shatrunjaysingh/trading-agent python3 /private/tmp/claude-501/-Users-shatrunjaysingh-trading-agent/8765421f-3ca9-4f1a-beb8-40012e28acaf/scratchpad/penny_diag.py)",
       "Bash(PYTHONPATH=/Users/shatrunjaysingh/trading-agent python3 *)",
-      "Bash(git checkout *)"
+      "Bash(git checkout *)",
+      "Bash(git pull *)",
+      "Bash(git merge *)"
     ]
   }
 }
