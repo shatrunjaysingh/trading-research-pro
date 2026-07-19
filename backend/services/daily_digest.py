@@ -209,6 +209,7 @@ def run_daily_digest(force: bool = False) -> dict:
                 fa = fe.analyze(fd, universe_stats=universe_stats)
                 s["composite"] = fa.get("composite")
                 s["distressed"] = bool(fa.get("guardrail_caps"))
+                s["_quality_pct"] = (fa.get("families", {}).get("quality") or {}).get("percentile")
         except Exception as exc:
             logger.warning("Digest factor scoring failed: %s", exc)
 
@@ -248,13 +249,26 @@ def run_daily_digest(force: bool = False) -> dict:
         logger.info("ST picks: %s", [p["ticker"] for p in top_st])
         logger.info("LT picks: %s", [p["ticker"] for p in top_lt])
 
-        # Build email picks list
+        # Fair value / upside for each pick (cheap — only ~10 picks).
+        from backend.services import valuation as _val
+        def _pick_val(p: dict) -> dict | None:
+            fd = p.get("_fdata")
+            if not fd:
+                return None
+            v = _val.estimate(fd, quality_pct=p.get("_quality_pct"))
+            return {"fair_value": v["fair_value"], "upside_pct": v["upside_pct"],
+                    "verdict": v["verdict"]} if v else None
+
+        # Build email picks list — now carrying the institutional composite rating
+        # and a fair-value estimate alongside the horizon signal.
         email_picks = (
             [{"horizon": "short", "signal": p["st_signal"], "score": p["st_score"],
+              "composite": p.get("composite"), "valuation": _pick_val(p),
               "reasoning": p["st_reasoning"], **{k: p[k] for k in ("ticker","company","price","day_change_pct","rs_score")}}
              for p in top_st]
             +
             [{"horizon": "long", "signal": p["lt_signal"] or "watch", "score": p.get("lt_score", 50),
+              "composite": p.get("composite"), "valuation": _pick_val(p),
               "reasoning": p["lt_reasoning"], **{k: p[k] for k in ("ticker","company","price","day_change_pct","rs_score")}}
              for p in top_lt]
         )

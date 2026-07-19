@@ -170,15 +170,26 @@ def build_digest_html(
     def pick_rows(items: list[dict]) -> str:
         rows = ""
         for p in items:
-            signal = p.get("signal", "watch")
-            score  = p.get("score", 50)
-            emoji  = _signal_emoji(signal)
-            rs     = p.get("rs_score", "—")
-            price  = p.get("price")
-            price_s = f"${price:,.2f}" if price else "—"
-            chg    = p.get("day_change_pct")
-            chg_s  = f"{chg:+.2f}%" if chg is not None else "—"
+            signal    = p.get("signal", "watch")
+            composite = p.get("composite")
+            rating    = composite if composite is not None else p.get("score", 50)
+            emoji     = _signal_emoji(signal)
+            rs        = p.get("rs_score", "—")
+            price     = p.get("price")
+            price_s   = f"${price:,.2f}" if price else "—"
+            chg       = p.get("day_change_pct")
+            chg_s     = f"{chg:+.2f}%" if chg is not None else "—"
             chg_color = "#16a34a" if (chg or 0) >= 0 else "#dc2626"
+
+            val = p.get("valuation")
+            if val and val.get("fair_value"):
+                up = val.get("upside_pct", 0) or 0
+                up_color = "#16a34a" if up >= 0 else "#dc2626"
+                fv_html = (f"<strong>${val['fair_value']:,.2f}</strong><br>"
+                           f"<span style=\"color:{up_color};font-size:11px;\">{up:+.1f}%</span>")
+            else:
+                fv_html = "<span style=\"color:#94a3b8;\">—</span>"
+
             reasons = p.get("reasoning", [])
             top_reason = reasons[0] if reasons else ""
             rows += f"""
@@ -188,21 +199,21 @@ def build_digest_html(
     <br><span style="font-size:12px;color:#64748b;">{p.get('company','')}</span>
   </td>
   <td style="padding:12px 8px;border-bottom:1px solid #e2e8f0;text-align:center;">
-    {emoji} <strong>{signal.upper()}</strong>
-  </td>
-  <td style="padding:12px 8px;border-bottom:1px solid #e2e8f0;text-align:center;">
-    <strong style="font-size:18px;">{score:.0f}</strong>/100<br>
-    <span style="font-family:monospace;font-size:10px;color:#94a3b8;">{_score_bar(score)}</span>
+    <strong style="font-size:18px;color:#1e293b;">{rating:.0f}</strong><span style="color:#94a3b8;">/100</span><br>
+    <span style="font-size:11px;">{emoji} {signal.upper()}</span>
   </td>
   <td style="padding:12px 8px;border-bottom:1px solid #e2e8f0;text-align:center;">
     <span style="font-size:13px;font-weight:bold;">{rs}</span><br>
-    <span style="font-size:11px;color:#94a3b8;">RS Rating</span>
+    <span style="font-size:11px;color:#94a3b8;">RS</span>
   </td>
   <td style="padding:12px 8px;border-bottom:1px solid #e2e8f0;text-align:right;">
     <strong>{price_s}</strong><br>
     <span style="color:{chg_color};font-size:12px;">{chg_s}</span>
   </td>
-  <td style="padding:12px 8px;border-bottom:1px solid #e2e8f0;font-size:12px;color:#475569;max-width:250px;">
+  <td style="padding:12px 8px;border-bottom:1px solid #e2e8f0;text-align:right;">
+    {fv_html}
+  </td>
+  <td style="padding:12px 8px;border-bottom:1px solid #e2e8f0;font-size:12px;color:#475569;max-width:220px;">
     {top_reason}
   </td>
 </tr>"""
@@ -239,11 +250,12 @@ Market data may be delayed up to 15 minutes.</p>"""
   <div class="section">
     <h2>🚀 <span class="badge st-badge">SHORT-TERM</span> &nbsp; Top picks for the next 1–4 weeks</h2>
     <p style="font-size:13px;color:#64748b;margin-bottom:16px;">
-      Ranked by technical momentum, RS Rating, and multi-timeframe alignment. Best entries are stocks with RSI 50–65, MACD positive, and RS &gt; 80.
+      Ranked by the cross-sectional factor <strong>Rating</strong> (momentum, quality, value, growth, revisions), RS Rating and near-term momentum.
+      Financially distressed names are screened out.
     </p>
     <table>
       <tr>
-        <th>Stock</th><th>Signal</th><th>Score</th><th>RS Rating</th><th>Price</th><th>Top Reason</th>
+        <th>Stock</th><th style="text-align:center;">Rating</th><th style="text-align:center;">RS</th><th style="text-align:right;">Price</th><th style="text-align:right;">Fair Value</th><th>Top Reason</th>
       </tr>
       {pick_rows(st_picks)}
     </table>
@@ -252,11 +264,12 @@ Market data may be delayed up to 15 minutes.</p>"""
   <div class="section" style="background:#f8fafc;">
     <h2>🏗️ <span class="badge lt-badge">LONG-TERM</span> &nbsp; Quality growth stocks for 3–12 months</h2>
     <p style="font-size:13px;color:#64748b;margin-bottom:16px;">
-      Ranked by fundamental quality (EPS growth, ROE, margins), RS Rating, and trend structure. Strong RS + strong fundamentals = high-conviction.
+      Ranked by the factor <strong>Rating</strong> with a quality/valuation tilt (EPS growth, ROE, margins, fair value), RS Rating and trend structure.
+      Distressed balance sheets are excluded, and <strong>Fair Value</strong> shows worth vs price.
     </p>
     <table>
       <tr>
-        <th>Stock</th><th>Signal</th><th>Score</th><th>RS Rating</th><th>Price</th><th>Top Reason</th>
+        <th>Stock</th><th style="text-align:center;">Rating</th><th style="text-align:center;">RS</th><th style="text-align:right;">Price</th><th style="text-align:right;">Fair Value</th><th>Top Reason</th>
       </tr>
       {pick_rows(lt_picks)}
     </table>
@@ -267,10 +280,10 @@ Market data may be delayed up to 15 minutes.</p>"""
   <div class="section">
     <h3 style="font-size:14px;color:#1e293b;margin-bottom:12px;">📖 How to use this digest</h3>
     <ul style="font-size:13px;color:#475569;line-height:1.8;padding-left:20px;">
-      <li><strong>RS Rating</strong>: 80+ = outperforming 80% of all stocks. Stocks with RS &gt; 85 before a breakout are the best candidates.</li>
-      <li><strong>Short-term</strong>: Look for RSI 50–65 + MACD positive + price above 50-day MA. Aim to hold 2–4 weeks.</li>
-      <li><strong>Long-term</strong>: EPS growth &gt;20% + RS &gt;70 + above 200-day MA = quality growth setup. Hold 3–12 months.</li>
-      <li><strong>Risk management</strong>: Never risk more than 1–2% of capital on a single trade. Use a stop loss at 7–8% below entry.</li>
+      <li><strong>Rating (/100)</strong>: a cross-sectional blend of six factors — momentum, quality, value, growth, analyst revisions and low-volatility — ranked vs the large-cap universe. 65+ leans Buy. Financially distressed names are auto-excluded from picks.</li>
+      <li><strong>Fair Value</strong>: an estimate of what the business is worth (earnings power + analyst consensus) vs today's price. A positive % = potential upside / margin of safety. It's an estimate, not a promise.</li>
+      <li><strong>RS Rating</strong>: 80+ = outperforming 80% of all stocks. Strong RS before a breakout is a good sign.</li>
+      <li><strong>Risk management</strong>: Never risk more than 1–2% of capital on a single trade. Size by conviction and use a stop (≈1.5× ATR below entry).</li>
     </ul>
     {disclaimer}
   </div>
