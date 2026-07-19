@@ -1004,8 +1004,9 @@ def _enrich_research_rows(rows: list) -> None:
         logger.warning("Research enrichment failed: %s", exc)
 
 
-def fetch_cheap_stocks(max_price: float = 5.0, min_market_cap: int = 50_000_000, limit: int = 50) -> list:
-    """Screen the broad US market for stocks priced below max_price,
+def fetch_cheap_stocks(max_price: float = 5.0, min_market_cap: int = 50_000_000, limit: int = 50,
+                       min_price: float = 0.10) -> list:
+    """Screen the broad US market for stocks priced within [min_price, max_price],
     score them with the multi-factor model, and return sorted results."""
     try:
         import yfinance as yf
@@ -1020,7 +1021,7 @@ def fetch_cheap_stocks(max_price: float = 5.0, min_market_cap: int = 50_000_000,
         query = EquityQuery("and", [
             EquityQuery("is-in", ["exchange", "NMS", "NYQ"]),
             EquityQuery("lt",    ["intradayprice", max_price]),
-            EquityQuery("gt",    ["intradayprice", 0.10]),
+            EquityQuery("gt",    ["intradayprice", min_price]),
             EquityQuery("gt",    ["intradaymarketcap", min_market_cap]),
         ])
         result  = yf.screen(query, size=limit, sortField="percentchange", sortAsc=False)
@@ -1052,7 +1053,7 @@ def fetch_cheap_stocks(max_price: float = 5.0, min_market_cap: int = 50_000_000,
             asset = futures[fut]
             try:
                 result = fut.result()
-                if result and result["current_price"] <= max_price:
+                if result and min_price <= result["current_price"] <= max_price:
                     rows.append(result)
             except Exception as exc:
                 logger.warning("Skipping %s: %s", asset["ticker"], exc)

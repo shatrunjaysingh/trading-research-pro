@@ -176,21 +176,21 @@ def run_daily_digest(force: bool = False) -> dict:
         except Exception as exc:
             logger.warning("Penny-stock screen failed: %s", exc)
 
-        # Crypto from config.yaml.
+        # Mid-priced stocks ($5–$25) screened from the broad market.
         try:
-            import yaml, os
-            cfg_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "config.yaml")
-            with open(cfg_path) as fh:
-                crypto_syms = (yaml.safe_load(fh) or {}).get("assets", {}).get("crypto", [])[:20]
-            tasks += [(t, "crypto") for t in crypto_syms if t]
+            from research import fetch_cheap_stocks
+            mid_syms = [r["ticker"] for r in
+                        fetch_cheap_stocks(min_price=5.0, max_price=25.0,
+                                           min_market_cap=50_000_000, limit=40)]
+            tasks += [(t, "mid") for t in mid_syms if _valid_ticker(t)]
         except Exception as exc:
-            logger.warning("Crypto list load failed: %s", exc)
+            logger.warning("Mid-price ($5–$25) screen failed: %s", exc)
 
         all_syms = [t for t, _a in tasks]
-        logger.info("Screening %d names (%d stocks, %d penny, %d crypto)…",
+        logger.info("Screening %d names (%d stocks, %d penny, %d mid $5–$25)…",
                     len(tasks), sum(1 for _t, a in tasks if a == "stock"),
                     sum(1 for _t, a in tasks if a == "penny"),
-                    sum(1 for _t, a in tasks if a == "crypto"))
+                    sum(1 for _t, a in tasks if a == "mid"))
 
         # Pre-fetch signal history for the whole universe in ONE query (main
         # thread) so worker threads never hit the DB pool during scoring.
@@ -297,14 +297,17 @@ def run_daily_digest(force: bool = False) -> dict:
         )
         top_penny = penny_eligible[:5]
 
-        # Top 5 crypto — momentum + RS (no fundamentals/distress metrics apply).
-        crypto_eligible = [s for s in scored if s.get("asset_type") == "crypto"]
-        crypto_eligible.sort(key=lambda x: x["st_score"] * 0.6 + x.get("rs_score", 50) * 0.4, reverse=True)
-        top_crypto = crypto_eligible[:5]
+        # Top 5 mid-priced ($5–$25) stocks — same distress guardrails, ranked by composite + momentum.
+        mid_eligible = [s for s in scored if s.get("asset_type") == "mid" and _quality_ok(s)]
+        mid_eligible.sort(
+            key=lambda x: (x.get("composite") or x["st_score"]) * 0.5 + x["st_score"] * 0.5,
+            reverse=True,
+        )
+        top_mid = mid_eligible[:5]
 
-        logger.info("ST picks: %s | LT: %s | Penny: %s | Crypto: %s",
+        logger.info("ST picks: %s | LT: %s | Penny: %s | Mid $5–$25: %s",
                     [p["ticker"] for p in top_st], [p["ticker"] for p in top_lt],
-                    [p["ticker"] for p in top_penny], [p["ticker"] for p in top_crypto])
+                    [p["ticker"] for p in top_penny], [p["ticker"] for p in top_mid])
 
         # Fair value / upside for each pick (cheap — only ~20 picks).
         from backend.services import valuation as _val
@@ -319,7 +322,7 @@ def run_daily_digest(force: bool = False) -> dict:
         def _mk(p: dict, horizon: str, signal, score) -> dict:
             return {"horizon": horizon, "signal": signal or "watch", "score": score or 50,
                     "composite": p.get("composite"), "valuation": _pick_val(p),
-                    "reasoning": p.get("st_reasoning") if horizon in ("short", "penny", "crypto") else p.get("lt_reasoning") or [],
+                    "reasoning": p.get("st_reasoning") if horizon in ("short", "penny", "mid") else p.get("lt_reasoning") or [],
                     **{k: p[k] for k in ("ticker", "company", "price", "day_change_pct", "rs_score")}}
 
         # Build email picks — one unified list across all four categories.
@@ -327,7 +330,7 @@ def run_daily_digest(force: bool = False) -> dict:
             [_mk(p, "short", p["st_signal"], p["st_score"]) for p in top_st]
             + [_mk(p, "long", p["lt_signal"], p.get("lt_score", 50)) for p in top_lt]
             + [_mk(p, "penny", p["st_signal"], p.get("composite") or p["st_score"]) for p in top_penny]
-            + [_mk(p, "crypto", p["st_signal"], p["st_score"]) for p in top_crypto]
+            + [_mk(p, "mid", p["st_signal"], p.get("composite") or p["st_score"]) for p in top_mid]
         )
 
         # Build per-user portfolio analyses in advance (only for users with saved portfolios)
@@ -411,7 +414,7 @@ def run_daily_digest(force: bool = False) -> dict:
             "st_picks": [p["ticker"] for p in top_st],
             "lt_picks": [p["ticker"] for p in top_lt],
             "penny_picks": [p["ticker"] for p in top_penny],
-            "crypto_picks": [p["ticker"] for p in top_crypto],
+            "mid_picks": [p["ticker"] for p in top_mid],
             "users_sent": users_sent,
             "recipients_found": len(all_recipients),
             "email_configured": email_configured,
