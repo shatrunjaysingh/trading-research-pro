@@ -1213,7 +1213,7 @@ def run_free(stocks: list, crypto: list, top_n: int, max_price: float | None = N
 # API MODE — Claude + web search
 # ---------------------------------------------------------------------------
 
-CONFIDENCE_THRESHOLD = 90   # minimum score to include a pick (API mode)
+CONFIDENCE_THRESHOLD = 70   # minimum score to include a pick (API mode)
 PICKS_PER_CATEGORY    = 5   # picks returned per category
 
 
@@ -1363,9 +1363,11 @@ SYSTEM_PROMPT = """You are a quantitative trading analyst. Research a given univ
 of stocks and cryptocurrencies using live market data and news, then rank them by
 short-term opportunity score for today.
 
-IMPORTANT QUALITY BAR: Only include picks where you have 90%+ confidence in the
-opportunity. Prefer returning fewer than 5 picks over including a low-conviction one.
-Return EXACTLY 5 picks (or fewer if not enough qualify at 90%+ confidence).
+QUALITY BAR: Rank the universe and return the TOP 5 by conviction today. Prefer
+high-confidence names, but ALWAYS return the best available picks — do NOT return
+an empty list just because the market is cautious. Give each pick an honest
+confidence_pct (be conservative when the tape is weak), and use signal=WATCH
+instead of BUY when conviction is only moderate.
 
 For each asset, research ALL of the following:
 1. Price momentum, volume vs 30-day average, and today's % change.
@@ -1408,15 +1410,17 @@ Respond ONLY with a JSON object:
   "avoid_today": ["TICKER1"],
   "avoid_reason": "brief explanation"
 }
-Signal: BUY | HOLD | WATCH. Score: 0-100 (only include if score >= 90). Rank by score descending."""
+Signal: BUY (high conviction) | WATCH (constructive, wait for entry) | HOLD. Score and confidence_pct 0-100. Return up to 5, ranked by score descending."""
 
 CHEAP_STOCK_SYSTEM_PROMPT = """You are a small-cap stock analyst specialising in
 low-price, high-potential equities (under $5). Your job is to identify stocks that
 are currently cheap but have strong future growth potential — NOT just momentum plays.
 
-IMPORTANT QUALITY BAR: Only include picks where you have 90%+ confidence in the
-opportunity. Prefer returning fewer than 5 picks over including a low-conviction one.
-Return EXACTLY 5 picks (or fewer if not enough qualify at 90%+ confidence).
+QUALITY BAR: Rank the universe and return the TOP 5 by conviction today. Prefer
+high-confidence names, but ALWAYS return the best available picks — do NOT return
+an empty list just because the market is cautious. Give each pick an honest
+confidence_pct (be conservative when the tape is weak), and use signal=WATCH
+instead of BUY when conviction is only moderate.
 
 For each stock consider:
 - Business model: is the company solving a real problem with a viable path to profitability?
@@ -1454,7 +1458,7 @@ Respond ONLY with a JSON object:
   "avoid_today": ["TICKER1"],
   "avoid_reason": "brief explanation"
 }
-Signal: BUY | HOLD | WATCH. Score: 0-100 (only include if score >= 90). Rank by score descending."""
+Signal: BUY (high conviction) | WATCH (constructive, wait for entry) | HOLD. Score and confidence_pct 0-100. Return up to 5, ranked by score descending."""
 
 
 def _parse_api_json(text: str) -> dict | None:
@@ -1539,9 +1543,9 @@ def run_api(stocks: list, crypto: list, top_n: int, max_price: float | None = No
             + all_sentiment +
             f"\n\nSearch for live prices, % changes, and recent news. "
             f"Return up to {PICKS_PER_CATEGORY} picks as JSON per the specified format. "
-            f"Quality over quantity — omit a pick rather than include a low-conviction one."
+            f"Return the best 5 available, ranked by conviction; use WATCH for moderate-conviction names rather than omitting them."
         )
-        all_label = f"ALL STOCKS — Top {PICKS_PER_CATEGORY} (90%+ Confidence)"
+        all_label = f"ALL STOCKS — Top {PICKS_PER_CATEGORY} (ranked by conviction)"
         all_data = _run_api_single(client, SYSTEM_PROMPT, all_stocks_msg, all_label, now)
 
         # --- Category 2: Penny stocks screened from the broad market ---
@@ -1550,19 +1554,19 @@ def run_api(stocks: list, crypto: list, top_n: int, max_price: float | None = No
         tickers  = [r["ticker"] for r in screened]
         logger.info("Screener returned %d tickers — sending to Claude.", len(tickers))
         penny_data = None
-        penny_label = f"PENNY STOCKS (under $5) — Top {PICKS_PER_CATEGORY} (90%+ Confidence)"
+        penny_label = f"PENNY STOCKS (under $5) — Top {PICKS_PER_CATEGORY} (ranked by conviction)"
         if tickers:
             penny_sentiment = _build_sentiment_block(tickers)
             penny_msg = (
                 f"Today is {now.strftime('%A, %Y-%m-%d')} at {now.strftime('%H:%M')} ET.\n\n"
                 f"Research the following stocks (all priced under $5) and identify the top "
                 f"{PICKS_PER_CATEGORY} with the strongest future growth potential. "
-                f"Only include picks with 90%+ confidence (score >= {CONFIDENCE_THRESHOLD}).\n\n"
+                f"Prefer high-confidence names but ALWAYS return the best {PICKS_PER_CATEGORY} available, ranked by conviction — never an empty list.\n\n"
                 f"Stocks to analyse: {', '.join(tickers)}"
                 + penny_sentiment +
                 "\n\nFor each pick, search for recent news, financials, catalysts, and business outlook. "
                 f"Return up to {PICKS_PER_CATEGORY} picks as JSON. "
-                f"Quality over quantity — omit a pick rather than include a low-conviction one."
+                f"Return the best 5 available, ranked by conviction; use WATCH for moderate-conviction names rather than omitting them."
             )
             penny_data = _run_api_single(client, CHEAP_STOCK_SYSTEM_PROMPT, penny_msg, penny_label, now)
 
@@ -2046,7 +2050,7 @@ RESEARCH PROCESS — execute ALL steps via web search:
 
 QUALITY BAR:
 - Score each stock 0-100 on short-to-medium term opportunity.
-- Set confidence 0-100%. Only include if BOTH score >= 90 AND confidence >= 90%.
+- Set confidence 0-100%. Only include if BOTH score >= 70 AND confidence >= 70%.
 - Return UP TO {top_n} picks. Fewer is better than including a weak pick.
 
 Respond ONLY with a valid JSON object — no markdown, no text outside the JSON:
@@ -2091,7 +2095,7 @@ Respond ONLY with a valid JSON object — no markdown, no text outside the JSON:
 }}
 
 Signal: BUY = high conviction buy now | WATCH = interesting but wait for better entry | HOLD = hold existing position.
-Only include picks with score >= 90 AND confidence >= 90%. Rank top_picks by score descending.\
+Only include picks with score >= 70 AND confidence >= 70%. Rank top_picks by score descending.\
 """
 
 PENNY_DEEP_RESEARCH_PROMPT_TEMPLATE = """\
@@ -2107,7 +2111,7 @@ KEY QUESTIONS FOR EACH STOCK:
 
 AVOID: pure pump plays, zero-revenue shells, companies in terminal decline, fraudulent operators.
 
-QUALITY BAR: Score >= 90 AND confidence >= 90%. Return UP TO {top_n} picks.
+QUALITY BAR: Rank all names and return the best UP TO {top_n} by conviction; prefer score/confidence >= 70 and use WATCH for moderate names rather than omitting them.
 
 Respond ONLY with a valid JSON object:
 {{
@@ -2145,7 +2149,7 @@ Respond ONLY with a valid JSON object:
   "avoid_reason": "Why these penny stocks should be avoided"
 }}
 
-Signal: BUY | WATCH | HOLD. Score and confidence 0-100. Only include if both >= 90%. Rank by score descending.\
+Signal: BUY | WATCH | HOLD. Score and confidence 0-100. Prefer both >= 70%; always return the best available ranked by score. Rank by score descending.\
 """
 
 
@@ -2305,7 +2309,7 @@ def run_sector_api(sector: str, tickers: list, top_n: int,
         user_msg = (
             f"Today is {now.strftime('%A, %Y-%m-%d')} at {now.strftime('%H:%M')} ET.\n\n"
             f"Research these penny stocks (all under ${max_price or 5:.2f}) and identify "
-            f"the top {top_n} genuine opportunities (score >= 90, confidence >= 90%).\n\n"
+            f"the top {top_n} genuine opportunities (score >= 70, confidence >= 70%).\n\n"
             f"Tickers: {', '.join(tickers)}"
             + _build_sentiment_block(tickers) +
             "\n\nSearch recent news, financials, catalysts, and business viability for each. "
@@ -2323,7 +2327,7 @@ def run_sector_api(sector: str, tickers: list, top_n: int,
         user_msg = (
             f"Today is {now.strftime('%A, %Y-%m-%d')} at {now.strftime('%H:%M')} ET.\n\n"
             f"Deep research on the following {sector_name} assets. "
-            f"Identify the top {top_n} highest-conviction picks (score >= 90, confidence >= 90%).\n\n"
+            f"Identify the top {top_n} highest-conviction picks (score >= 70, confidence >= 70%).\n\n"
             f"Tickers: {', '.join(tickers)}"
             + tech_context
             + _build_sentiment_block(tickers) +
