@@ -1948,30 +1948,47 @@ def _build_research_html(sections: list[dict], now: datetime, mode: str) -> str:
 
 
 def send_research_email(html: str, email_cfg: dict, now: datetime) -> None:
-    """Send the research HTML as an email to configured recipients."""
-    raw          = email_cfg["recipient"]
-    recipients   = raw if isinstance(raw, list) else [raw]
+    """Send the research HTML to configured recipients.
+
+    Prefers the shared delivery path (SendGrid HTTP API in production, SMTP
+    locally) so the research report is no longer silently dropped on hosts that
+    block outbound SMTP — the reason it stopped arriving. Falls back to direct
+    SMTP only if that path is unavailable.
+    """
+    raw        = email_cfg["recipient"]
+    recipients = raw if isinstance(raw, list) else [raw]
+    subject    = f"Trading Research — Top 5 Picks — {now.strftime('%A, %Y-%m-%d')}"
+
+    # 1) Shared path (SendGrid preferred, SMTP fallback) — one call per recipient.
+    try:
+        from backend.services.email_service import send_email as _send
+        sent = 0
+        for r in recipients:
+            try:
+                if _send(to_email=r, subject=subject, html_body=html):
+                    sent += 1
+            except Exception as exc:
+                logger.error("Research email to %s failed: %s", r, exc)
+        logger.info("Research email sent to %d/%d recipients", sent, len(recipients))
+        return
+    except Exception as exc:
+        logger.warning("Shared email path unavailable (%s) — falling back to SMTP", exc)
+
+    # 2) Direct SMTP fallback (works locally; blocked on some hosts).
     sender       = os.getenv("EMAIL_SENDER") or email_cfg.get("sender", "")
     app_password = "".join(os.getenv("EMAIL_APP_PASSWORD", "").split())
     smtp_host    = email_cfg.get("smtp_host", "smtp.gmail.com")
     smtp_port    = email_cfg.get("smtp_port", 587)
-
-    if not sender:
-        logger.error("EMAIL_SENDER env var not set — skipping email.")
-        return
-    if not app_password:
-        logger.error("EMAIL_APP_PASSWORD env var not set — skipping email.")
+    if not sender or not app_password:
+        logger.error("EMAIL_SENDER / EMAIL_APP_PASSWORD not set — skipping email.")
         return
 
-    subject = f"Trading Research — Top 5 Picks — {now.strftime('%A, %Y-%m-%d')}"
     msg = MIMEMultipart("alternative")
     msg["From"]    = sender
     msg["To"]      = ", ".join(recipients)
     msg["Subject"] = subject
     msg.attach(MIMEText(html, "html"))
-
-    logger.info("Sending research email to %s via %s:%d ...",
-                ", ".join(recipients), smtp_host, smtp_port)
+    logger.info("Sending research email to %s via %s:%d ...", ", ".join(recipients), smtp_host, smtp_port)
     with smtplib.SMTP(smtp_host, smtp_port) as server:
         server.starttls()
         server.login(sender, app_password)
