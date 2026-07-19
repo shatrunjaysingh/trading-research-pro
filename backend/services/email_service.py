@@ -167,7 +167,7 @@ def build_digest_html(
     st_picks    = [p for p in picks if p.get("horizon") == "short"]
     lt_picks    = [p for p in picks if p.get("horizon") == "long"]
     penny_picks = [p for p in picks if p.get("horizon") == "penny"]
-    crypto_picks = [p for p in picks if p.get("horizon") == "crypto"]
+    mid_picks   = [p for p in picks if p.get("horizon") == "mid"]
 
     def pick_rows(items: list[dict]) -> str:
         rows = ""
@@ -291,15 +291,15 @@ Market data may be delayed up to 15 minutes.</p>"""
   </div>
 
   <div class="section" style="background:#f8fafc;">
-    <h2>🪙 <span class="badge" style="background:#ede9fe;color:#6d28d9;">CRYPTO</span> &nbsp; Top crypto by momentum</h2>
+    <h2>📊 <span class="badge" style="background:#e0f2fe;color:#0369a1;">$5–$25</span> &nbsp; Top stocks priced $5 to $25</h2>
     <p style="font-size:13px;color:#64748b;margin-bottom:16px;">
-      Ranked by momentum and relative strength (crypto has no fundamentals, so the fair-value column doesn't apply). Highly volatile — size small.
+      Mid-priced names screened from the broad market and scored on the same factor engine, with <strong>Fair Value</strong> vs price. Distressed balance sheets are excluded.
     </p>
     <table>
       <tr>
-        <th>Asset</th><th style="text-align:center;">Rating</th><th style="text-align:center;">RS</th><th style="text-align:right;">Price</th><th style="text-align:right;">Fair Value</th><th>Top Reason</th>
+        <th>Stock</th><th style="text-align:center;">Rating</th><th style="text-align:center;">RS</th><th style="text-align:right;">Price</th><th style="text-align:right;">Fair Value</th><th>Top Reason</th>
       </tr>
-      {pick_rows(crypto_picks)}
+      {pick_rows(mid_picks)}
     </table>
   </div>
 
