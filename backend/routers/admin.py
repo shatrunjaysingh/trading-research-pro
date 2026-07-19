@@ -7,7 +7,7 @@ import auth as auth_module
 import database as db
 from database import (
     get_all_users, create_user, update_user, deactivate_user, activate_user,
-    change_password, get_all_licenses, create_license, update_license,
+    delete_user, change_password, get_all_licenses, create_license, update_license,
     deactivate_license, get_audit_log, get_user_count_for_license, log_audit,
     get_token_stats, get_backtest_results, fill_backtest_returns,
     save_hist_backtest, get_hist_backtest_latest,
@@ -78,6 +78,16 @@ def deactivate_user_admin(user_id: int, admin: dict = Depends(_require_admin)):
 def activate_user_admin(user_id: int, admin: dict = Depends(_require_admin)):
     activate_user(user_id)
     log_audit(admin.get("id"), admin.get("username",""), "admin_activate_user", f"Activated {user_id}")
+
+
+@router.delete("/users/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_user_admin(user_id: int, admin: dict = Depends(_require_admin)):
+    if user_id == admin.get("id"):
+        raise HTTPException(status_code=400, detail="You cannot delete your own account.")
+    ok = delete_user(user_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="User not found.")
+    log_audit(admin.get("id"), admin.get("username",""), "admin_delete_user", f"Deleted user {user_id}")
 
 
 @router.post("/users/{user_id}/reset-password", status_code=status.HTTP_204_NO_CONTENT)

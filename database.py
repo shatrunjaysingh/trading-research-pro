@@ -674,6 +674,15 @@ def activate_user(user_id: int) -> bool:
         return cur.rowcount > 0
 
 
+def delete_user(user_id: int) -> bool:
+    """Permanently delete a user. Owned rows (watchlists, portfolios, journals…)
+    cascade and audit/created_by references null out per the schema's FKs."""
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM users WHERE id = %s", (user_id,))
+        return cur.rowcount > 0
+
+
 def update_last_login(user_id: int) -> None:
     with get_db() as conn:
         cur = conn.cursor()

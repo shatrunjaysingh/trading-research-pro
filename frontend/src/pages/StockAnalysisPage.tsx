@@ -2162,12 +2162,11 @@ function WatchlistButton({ ticker }: { ticker: string }) {
 export function StockAnalysisPage() {
   const { user } = useAuthStore()
   const isAdmin   = user?.role === 'admin'
-  const canUseApi = isAdmin  // AI Deep Dive and Final Verdict are admin-only
 
   // Pre-fill ticker from URL query param (e.g. /stocks?ticker=AAPL from watchlist)
   const urlParams = new URLSearchParams(typeof window !== 'undefined' ? window.location.search : '')
   const [ticker, setTicker] = useState(urlParams.get('ticker') ?? '')
-  const [mode, setMode] = useState<'free' | 'api'>(canUseApi ? 'api' : 'free')
+  const mode = 'free' as const  // Stock analysis uses the free Yahoo Finance (yfinance) source
   const [period, setPeriod] = useState<StockAnalysisRequest['time_period']>('3m')
   const [indicators, setIndicators] = useState<IndicatorKey[]>(['rsi', 'macd', 'sma50', 'sma200', 'volume'])
   const [includeNews, setIncludeNews] = useState(true)
@@ -2433,36 +2432,7 @@ export function StockAnalysisPage() {
             </div>
           </div>
 
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-
-            {/* Analysis mode */}
-            <div>
-              <label className="label">Analysis Mode</label>
-              <div className="flex gap-2">
-                {(['free', 'api'] as const).map(m => (
-                  <button
-                    key={m}
-                    disabled={m === 'api' && !canUseApi}
-                    onClick={() => setMode(m)}
-                    className={clsx(
-                      'flex-1 py-2 rounded-lg border text-sm font-medium transition-all',
-                      mode === m
-                        ? 'bg-blue-600 text-white border-blue-600'
-                        : 'bg-surface-muted text-ink-muted border-surface-border hover:border-primary/50',
-                      m === 'api' && !canUseApi && 'opacity-40 cursor-not-allowed',
-                    )}
-                  >
-                    {m === 'free' ? 'Free (yfinance)' : '✨ AI Deep Dive'}
-                  </button>
-                ))}
-              </div>
-              {!canUseApi && (
-                <p className="text-xs text-ink-faint mt-1.5">AI Deep Dive and Final Verdict are available to admin users only</p>
-              )}
-              {mode === 'api' && canUseApi && (
-                <p className="text-xs text-blue-600 mt-1.5">Claude will generate a narrative analysis + Final Verdict with price targets</p>
-              )}
-            </div>
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
 
             {/* Time period */}
             <div>

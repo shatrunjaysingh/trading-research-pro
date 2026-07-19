@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { apiGetUsers, apiGetLicenses, apiGetAudit, apiCreateUser, apiUpdateUser, apiDeactivateUser, apiActivateUser, apiGetTokenUsage, apiGetBacktest, apiRunHistoricalBacktest, apiGetHistoricalBacktest, apiGetRegime, apiSendDigest, apiGetDigestEmails, apiAddDigestEmail, apiToggleDigestEmail, apiDeleteDigestEmail, apiTestEmail } from '../api/admin'
+import { apiGetUsers, apiGetLicenses, apiGetAudit, apiCreateUser, apiUpdateUser, apiDeactivateUser, apiActivateUser, apiDeleteUser, apiResetPassword, apiGetTokenUsage, apiGetBacktest, apiRunHistoricalBacktest, apiGetHistoricalBacktest, apiGetRegime, apiSendDigest, apiGetDigestEmails, apiAddDigestEmail, apiToggleDigestEmail, apiDeleteDigestEmail, apiTestEmail } from '../api/admin'
 import { RoleBadge, TierBadge, StatusBadge } from '../components/ui/Badge'
 import { KpiCard } from '../components/ui/KpiCard'
 import { Spinner } from '../components/ui/Spinner'
@@ -125,6 +125,9 @@ function UsersTab({ users, licenses }: { users: User[]; licenses: License[] }) {
   const qc = useQueryClient()
   const [showAdd, setShowAdd] = useState(false)
   const [editing, setEditing] = useState<User | null>(null)
+  const [resetting, setResetting] = useState<User | null>(null)
+  const [newPw, setNewPw] = useState('')
+  const [pwErr, setPwErr] = useState('')
   const [form, setForm] = useState({ email:'', username:'', password:'', full_name:'', role:'viewer', license_id:'' })
   const [editForm, setEditForm] = useState({ role:'viewer', license_id:'', is_active:true })
   const [err, setErr] = useState('')
@@ -143,6 +146,18 @@ function UsersTab({ users, licenses }: { users: User[]; licenses: License[] }) {
   const toggleMut = useMutation({
     mutationFn: (u: User) => u.is_active ? apiDeactivateUser(u.id) : apiActivateUser(u.id),
     onSuccess: () => qc.invalidateQueries({queryKey:['admin-users']}),
+  })
+
+  const deleteMut = useMutation({
+    mutationFn: (u: User) => apiDeleteUser(u.id),
+    onSuccess: () => qc.invalidateQueries({queryKey:['admin-users']}),
+    onError: (e: unknown) => alert((e as { response?: { data?: { detail?: string } } })?.response?.data?.detail || 'Failed to delete user'),
+  })
+
+  const resetPwMut = useMutation({
+    mutationFn: (u: User) => apiResetPassword(u.id, newPw),
+    onSuccess: () => { setResetting(null); setNewPw(''); setPwErr('') },
+    onError: (e: unknown) => setPwErr((e as { response?: { data?: { detail?: string } } })?.response?.data?.detail || 'Failed to reset password'),
   })
 
   return (
@@ -210,8 +225,16 @@ function UsersTab({ users, licenses }: { users: User[]; licenses: License[] }) {
                     <button onClick={() => { setEditing(u); setEditForm({ role: u.role, license_id: String(u.license_id || ''), is_active: u.is_active }) }}
                       className="btn-secondary text-xs py-1">Edit</button>
                     <button onClick={() => toggleMut.mutate(u)}
-                      className={`text-xs py-1 px-2 rounded-lg font-semibold transition-all ${u.is_active ? 'bg-red-50 text-red-600 hover:bg-red-100' : 'bg-green-50 text-green-700 hover:bg-green-100'}`}>
+                      className={`text-xs py-1 px-2 rounded-lg font-semibold transition-all ${u.is_active ? 'bg-amber-50 text-amber-700 hover:bg-amber-100' : 'bg-green-50 text-green-700 hover:bg-green-100'}`}>
                       {u.is_active ? 'Deactivate' : 'Activate'}
+                    </button>
+                    <button onClick={() => { setResetting(u); setNewPw(''); setPwErr('') }}
+                      className="text-xs py-1 px-2 rounded-lg font-semibold bg-surface-muted text-ink-muted hover:bg-surface-border transition-all">
+                      Reset PW
+                    </button>
+                    <button onClick={() => { if (confirm(`Permanently delete ${u.full_name || u.email}? This removes their account and all their data and cannot be undone.`)) deleteMut.mutate(u) }}
+                      className="text-xs py-1 px-2 rounded-lg font-semibold bg-red-50 text-red-600 hover:bg-red-100 transition-all">
+                      Delete
                     </button>
                   </div>
                 </td>
@@ -268,6 +291,48 @@ function UsersTab({ users, licenses }: { users: User[]; licenses: License[] }) {
                 {updateMut.isPending ? 'Saving…' : 'Save'}
               </button>
               <button onClick={() => setEditing(null)} className="btn-secondary text-sm">Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Reset-password modal — click backdrop or press ESC to close */}
+      {resetting && (
+        <div
+          className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4"
+          onClick={() => setResetting(null)}
+          onKeyDown={e => e.key === 'Escape' && setResetting(null)}
+          role="dialog"
+          tabIndex={-1}
+        >
+          <div
+            className="bg-surface rounded-2xl shadow-xl p-6 w-full max-w-md border border-surface-border"
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="font-bold text-lg">Reset Password — {resetting.full_name || resetting.username}</h3>
+              <button
+                onClick={() => setResetting(null)}
+                className="text-ink-faint hover:text-ink text-xl leading-none px-1"
+                aria-label="Close"
+              >
+                ✕
+              </button>
+            </div>
+            <div className="space-y-3">
+              <div>
+                <label className="label">New password</label>
+                <input type="password" className="input" value={newPw} autoFocus
+                  onChange={e => { setNewPw(e.target.value); setPwErr('') }}
+                  onKeyDown={e => { if (e.key === 'Enter' && newPw) resetPwMut.mutate(resetting) }} />
+              </div>
+              {pwErr && <p className="text-sm text-red-600">{pwErr}</p>}
+            </div>
+            <div className="flex gap-2 mt-5">
+              <button onClick={() => resetPwMut.mutate(resetting)} disabled={resetPwMut.isPending || !newPw} className="btn-primary text-sm">
+                {resetPwMut.isPending ? 'Saving…' : 'Set Password'}
+              </button>
+              <button onClick={() => setResetting(null)} className="btn-secondary text-sm">Cancel</button>
             </div>
           </div>
         </div>
