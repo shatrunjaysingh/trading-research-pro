@@ -24,9 +24,14 @@ SP100 = [
 
 
 def _score_ticker_for_digest(
-    ticker: str, spy_returns: dict, prior_rows: list[dict] | None = None
+    ticker: str, spy_returns: dict, prior_rows: list[dict] | None = None,
+    asset_type: str = "stock",
 ) -> dict | None:
-    """Score a single ticker. Returns None on failure.
+    """Score a single ticker (stock, penny stock, or crypto). Returns None on fail.
+
+    `asset_type` = "stock" | "penny" | "crypto". Crypto symbols are mapped to the
+    yfinance `-USD` form for all fetches while the display ticker stays clean, and
+    the penny-price filter is skipped for crypto (whose prices can be tiny).
 
     `prior_rows` is this ticker's stored signal history (most-recent-first),
     pre-fetched in the main thread so workers never touch the DB. The raw ST/LT
@@ -43,9 +48,12 @@ def _score_ticker_for_digest(
         )
         from backend.services.signal_stabilizer import stabilize
 
+        # yfinance symbol (crypto needs the -USD suffix); display ticker stays clean.
+        yf_sym = f"{ticker}-USD" if asset_type == "crypto" else ticker
+
         # Technical (3m daily — same as main scorer)
         tech_result = _fetch_stock_data(
-            ticker, "3mo", "1d",
+            yf_sym, "3mo", "1d",
             ["rsi", "macd", "sma50", "sma200", "volume"],
         )
         if "error" in tech_result or not tech_result.get("technical"):
@@ -53,21 +61,23 @@ def _score_ticker_for_digest(
 
         tech = tech_result["technical"]
         price = tech.get("current_price")
-        if not price or price < 0.5:  # skip penny stocks for digest
+        if not price:
+            return None
+        if asset_type == "stock" and price < 0.5:   # only large-caps skip sub-$0.50
             return None
 
         # RS rating (reuse pre-fetched SPY returns)
-        rs_data = compute_rs_rating(ticker, spy_returns=spy_returns)
+        rs_data = compute_rs_rating(yf_sym, spy_returns=spy_returns)
         rs_score = rs_data.get("rs_score", 50)
 
         # Weekly confirmation
-        weekly = _compute_weekly_confirmation(ticker)
+        weekly = _compute_weekly_confirmation(yf_sym)
 
         # ST score
         st = _compute_st_score(tech, rs_score, weekly)
 
-        # LT score (needs fundamentals)
-        fund = _fetch_fundamentals(ticker)
+        # Fundamentals + LT score (crypto has none → LT stays None)
+        fund = None if asset_type == "crypto" else _fetch_fundamentals(yf_sym)
         lt = _compute_lt_score(tech, fund, rs_score) if fund else None
 
         company = (fund or {}).get("company_name") or ticker
@@ -84,21 +94,21 @@ def _score_ticker_for_digest(
         lt_score = row.get("lt_smoothed") if lt else None
         lt_signal = row.get("lt_signal") if lt else None
 
-        # Raw factor exposures — accumulated across the universe into the daily
-        # cross-sectional distribution single-stock analysis ranks against.
-        # Includes financial-health metrics (Piotroski/Altman/ROIC/FCF) so the
-        # universe distribution covers the same factors single-stock analysis uses.
+        # Raw factor exposures + financial health (stocks only) for cross-sectional
+        # ranking + the composite/guardrails computed by the caller.
         from backend.services.factor_engine import merge_factor_data, compute_exposures
         from backend.services.financial_health import get_financial_health
         fdata = merge_factor_data(tech, fund, None, rs_score)
-        try:
-            fdata.update({k: v for k, v in get_financial_health(ticker).items() if v is not None})
-        except Exception:
-            pass
+        if asset_type != "crypto":
+            try:
+                fdata.update({k: v for k, v in get_financial_health(yf_sym).items() if v is not None})
+            except Exception:
+                pass
         exposures = compute_exposures(fdata)
 
         return {
             "ticker":        ticker,
+            "asset_type":    asset_type,
             "company":       company,
             "price":         price,
             "day_change_pct": tech.get("day_change_pct"),
@@ -152,29 +162,58 @@ def run_daily_digest(force: bool = False) -> dict:
             pass
 
         universe = list(set(SP100 + watchlist_tickers))
-        logger.info("Screening %d tickers…", len(universe))
+
+        # Categorised task list: large-caps + sub-$5 penny stocks + crypto, all
+        # scored on the same factor engine so one digest covers everything.
+        tasks: list[tuple[str, str]] = [(t, "stock") for t in universe]
+
+        # Penny stocks (< $5) screened from the broad market.
+        try:
+            from research import fetch_cheap_stocks
+            penny_syms = [r["ticker"] for r in
+                          fetch_cheap_stocks(max_price=5.0, min_market_cap=10_000_000, limit=40)]
+            tasks += [(t, "penny") for t in penny_syms if _valid_ticker(t)]
+        except Exception as exc:
+            logger.warning("Penny-stock screen failed: %s", exc)
+
+        # Crypto from config.yaml.
+        try:
+            import yaml, os
+            cfg_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "config.yaml")
+            with open(cfg_path) as fh:
+                crypto_syms = (yaml.safe_load(fh) or {}).get("assets", {}).get("crypto", [])[:20]
+            tasks += [(t, "crypto") for t in crypto_syms if t]
+        except Exception as exc:
+            logger.warning("Crypto list load failed: %s", exc)
+
+        all_syms = [t for t, _a in tasks]
+        logger.info("Screening %d names (%d stocks, %d penny, %d crypto)…",
+                    len(tasks), sum(1 for _t, a in tasks if a == "stock"),
+                    sum(1 for _t, a in tasks if a == "penny"),
+                    sum(1 for _t, a in tasks if a == "crypto"))
 
         # Pre-fetch signal history for the whole universe in ONE query (main
         # thread) so worker threads never hit the DB pool during scoring.
         try:
-            history_map = db.get_recent_signal_history_bulk(universe, lookback_days=10, before=today)
+            history_map = db.get_recent_signal_history_bulk(all_syms, lookback_days=10, before=today)
         except Exception as exc:
             logger.warning("Signal history prefetch failed: %s", exc)
             history_map = {}
 
-        # Score all tickers in parallel (max 20 workers)
+        # Score all names in parallel (max 20 workers)
         scored: list[dict] = []
         with ThreadPoolExecutor(max_workers=20) as ex:
             futures = {
-                ex.submit(_score_ticker_for_digest, t, spy_returns, history_map.get(t.upper()))
-                : t for t in universe
+                ex.submit(_score_ticker_for_digest, t, spy_returns,
+                          history_map.get(t.upper()), atype): (t, atype)
+                for (t, atype) in tasks
             }
             for f in as_completed(futures):
                 result = f.result()
                 if result:
                     scored.append(result)
 
-        logger.info("Scored %d/%d tickers successfully", len(scored), len(universe))
+        logger.info("Scored %d/%d names successfully", len(scored), len(tasks))
 
         # Persist today's stabilized signal rows in one batch (main thread).
         try:
@@ -192,7 +231,9 @@ def run_daily_digest(force: bool = False) -> dict:
         universe_stats = None
         try:
             from backend.services.factor_engine import accumulate_universe_stats
-            exp_rows = [s["_exposures"] for s in scored if s.get("_exposures")]
+            # Equities only — crypto factor scales would skew the distribution.
+            exp_rows = [s["_exposures"] for s in scored
+                        if s.get("_exposures") and s.get("asset_type") != "crypto"]
             if len(exp_rows) >= 10:
                 universe_stats = accumulate_universe_stats(exp_rows)
                 db.save_factor_universe_stats(today, universe_stats, len(exp_rows))
@@ -221,9 +262,11 @@ def run_daily_digest(force: bool = False) -> dict:
             comp = s.get("composite")
             return comp is None or comp >= 50
 
-        # Top 5 short-term: momentum + RS, gated by composite quality & distress.
+        stocks_only = [s for s in scored if s.get("asset_type") == "stock"]
+
+        # Top 5 short-term (large-cap): momentum + RS, gated by composite & distress.
         st_eligible = [
-            s for s in scored
+            s for s in stocks_only
             if _quality_ok(s) and s["st_score"] >= 60 and s.get("rs_score", 0) >= 65
         ]
         st_eligible.sort(
@@ -233,9 +276,9 @@ def run_daily_digest(force: bool = False) -> dict:
         )
         top_st = st_eligible[:5]
 
-        # Top 5 long-term: LT quality + RS, gated by composite quality & distress.
+        # Top 5 long-term (large-cap): LT quality + RS, gated by composite & distress.
         lt_eligible = [
-            s for s in scored
+            s for s in stocks_only
             if _quality_ok(s) and s.get("lt_score") is not None
             and s["lt_score"] >= 60 and s.get("rs_score", 0) >= 60
         ]
@@ -246,10 +289,24 @@ def run_daily_digest(force: bool = False) -> dict:
         )
         top_lt = lt_eligible[:5]
 
-        logger.info("ST picks: %s", [p["ticker"] for p in top_st])
-        logger.info("LT picks: %s", [p["ticker"] for p in top_lt])
+        # Top 5 sub-$5 stocks — same distress guardrails, ranked by composite + momentum.
+        penny_eligible = [s for s in scored if s.get("asset_type") == "penny" and _quality_ok(s)]
+        penny_eligible.sort(
+            key=lambda x: (x.get("composite") or x["st_score"]) * 0.5 + x["st_score"] * 0.5,
+            reverse=True,
+        )
+        top_penny = penny_eligible[:5]
 
-        # Fair value / upside for each pick (cheap — only ~10 picks).
+        # Top 5 crypto — momentum + RS (no fundamentals/distress metrics apply).
+        crypto_eligible = [s for s in scored if s.get("asset_type") == "crypto"]
+        crypto_eligible.sort(key=lambda x: x["st_score"] * 0.6 + x.get("rs_score", 50) * 0.4, reverse=True)
+        top_crypto = crypto_eligible[:5]
+
+        logger.info("ST picks: %s | LT: %s | Penny: %s | Crypto: %s",
+                    [p["ticker"] for p in top_st], [p["ticker"] for p in top_lt],
+                    [p["ticker"] for p in top_penny], [p["ticker"] for p in top_crypto])
+
+        # Fair value / upside for each pick (cheap — only ~20 picks).
         from backend.services import valuation as _val
         def _pick_val(p: dict) -> dict | None:
             fd = p.get("_fdata")
@@ -259,18 +316,18 @@ def run_daily_digest(force: bool = False) -> dict:
             return {"fair_value": v["fair_value"], "upside_pct": v["upside_pct"],
                     "verdict": v["verdict"]} if v else None
 
-        # Build email picks list — now carrying the institutional composite rating
-        # and a fair-value estimate alongside the horizon signal.
+        def _mk(p: dict, horizon: str, signal, score) -> dict:
+            return {"horizon": horizon, "signal": signal or "watch", "score": score or 50,
+                    "composite": p.get("composite"), "valuation": _pick_val(p),
+                    "reasoning": p.get("st_reasoning") if horizon in ("short", "penny", "crypto") else p.get("lt_reasoning") or [],
+                    **{k: p[k] for k in ("ticker", "company", "price", "day_change_pct", "rs_score")}}
+
+        # Build email picks — one unified list across all four categories.
         email_picks = (
-            [{"horizon": "short", "signal": p["st_signal"], "score": p["st_score"],
-              "composite": p.get("composite"), "valuation": _pick_val(p),
-              "reasoning": p["st_reasoning"], **{k: p[k] for k in ("ticker","company","price","day_change_pct","rs_score")}}
-             for p in top_st]
-            +
-            [{"horizon": "long", "signal": p["lt_signal"] or "watch", "score": p.get("lt_score", 50),
-              "composite": p.get("composite"), "valuation": _pick_val(p),
-              "reasoning": p["lt_reasoning"], **{k: p[k] for k in ("ticker","company","price","day_change_pct","rs_score")}}
-             for p in top_lt]
+            [_mk(p, "short", p["st_signal"], p["st_score"]) for p in top_st]
+            + [_mk(p, "long", p["lt_signal"], p.get("lt_score", 50)) for p in top_lt]
+            + [_mk(p, "penny", p["st_signal"], p.get("composite") or p["st_score"]) for p in top_penny]
+            + [_mk(p, "crypto", p["st_signal"], p["st_score"]) for p in top_crypto]
         )
 
         # Build per-user portfolio analyses in advance (only for users with saved portfolios)
@@ -353,11 +410,13 @@ def run_daily_digest(force: bool = False) -> dict:
             "date": str(today),
             "st_picks": [p["ticker"] for p in top_st],
             "lt_picks": [p["ticker"] for p in top_lt],
+            "penny_picks": [p["ticker"] for p in top_penny],
+            "crypto_picks": [p["ticker"] for p in top_crypto],
             "users_sent": users_sent,
             "recipients_found": len(all_recipients),
             "email_configured": email_configured,
             "send_errors": send_errors,
-            "universe_size": len(universe),
+            "universe_size": len(tasks),
             "scored": len(scored),
         }
 

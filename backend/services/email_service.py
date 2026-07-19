@@ -164,8 +164,10 @@ def build_digest_html(
 ) -> str:
     """Build the HTML body for a daily digest email."""
 
-    st_picks = [p for p in picks if p.get("horizon") == "short"]
-    lt_picks = [p for p in picks if p.get("horizon") == "long"]
+    st_picks    = [p for p in picks if p.get("horizon") == "short"]
+    lt_picks    = [p for p in picks if p.get("horizon") == "long"]
+    penny_picks = [p for p in picks if p.get("horizon") == "penny"]
+    crypto_picks = [p for p in picks if p.get("horizon") == "crypto"]
 
     def pick_rows(items: list[dict]) -> str:
         rows = ""
@@ -272,6 +274,32 @@ Market data may be delayed up to 15 minutes.</p>"""
         <th>Stock</th><th style="text-align:center;">Rating</th><th style="text-align:center;">RS</th><th style="text-align:right;">Price</th><th style="text-align:right;">Fair Value</th><th>Top Reason</th>
       </tr>
       {pick_rows(lt_picks)}
+    </table>
+  </div>
+
+  <div class="section">
+    <h2>💰 <span class="badge" style="background:#fef3c7;color:#92400e;">SUB-$5</span> &nbsp; Top stocks under $5</h2>
+    <p style="font-size:13px;color:#64748b;margin-bottom:16px;">
+      Low-priced names screened from the broad market and scored on the same factor engine. Higher risk — distressed balance sheets are excluded.
+    </p>
+    <table>
+      <tr>
+        <th>Stock</th><th style="text-align:center;">Rating</th><th style="text-align:center;">RS</th><th style="text-align:right;">Price</th><th style="text-align:right;">Fair Value</th><th>Top Reason</th>
+      </tr>
+      {pick_rows(penny_picks)}
+    </table>
+  </div>
+
+  <div class="section" style="background:#f8fafc;">
+    <h2>🪙 <span class="badge" style="background:#ede9fe;color:#6d28d9;">CRYPTO</span> &nbsp; Top crypto by momentum</h2>
+    <p style="font-size:13px;color:#64748b;margin-bottom:16px;">
+      Ranked by momentum and relative strength (crypto has no fundamentals, so the fair-value column doesn't apply). Highly volatile — size small.
+    </p>
+    <table>
+      <tr>
+        <th>Asset</th><th style="text-align:center;">Rating</th><th style="text-align:center;">RS</th><th style="text-align:right;">Price</th><th style="text-align:right;">Fair Value</th><th>Top Reason</th>
+      </tr>
+      {pick_rows(crypto_picks)}
     </table>
   </div>
 
