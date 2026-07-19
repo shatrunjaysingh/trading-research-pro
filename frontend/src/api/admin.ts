@@ -7,6 +7,7 @@ export const apiCreateUser = (data: object) => client.post<User>('/admin/users',
 export const apiUpdateUser = (id: number, data: object) => client.patch<User>(`/admin/users/${id}`, data).then(r => r.data)
 export const apiDeactivateUser = (id: number) => client.post(`/admin/users/${id}/deactivate`)
 export const apiActivateUser   = (id: number) => client.post(`/admin/users/${id}/activate`)
+export const apiDeleteUser     = (id: number) => client.delete(`/admin/users/${id}`)
 export const apiResetPassword  = (id: number, new_password: string) =>
   client.post(`/admin/users/${id}/reset-password`, { new_password })
 
