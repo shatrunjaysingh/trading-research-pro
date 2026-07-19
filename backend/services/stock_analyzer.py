@@ -727,6 +727,58 @@ def _fetch_institutional(ticker: str) -> dict:
     return result if result else None
 
 
+def _fetch_catalysts(ticker: str) -> dict | None:
+    """Next earnings date + event-risk flag so binary events inside the horizon
+    aren't invisible. Returns {next_earnings_date, earnings_days_out, event_risk,
+    ex_div_date} or None."""
+    try:
+        import yfinance as yf
+        from datetime import date, datetime
+    except ImportError:
+        return None
+
+    out: dict = {}
+    try:
+        cal = yf.Ticker(ticker.strip().upper()).calendar
+
+        def _to_date(v):
+            if v is None:
+                return None
+            if isinstance(v, list):
+                v = v[0] if v else None
+            if hasattr(v, "date"):
+                try:
+                    return v.date()
+                except Exception:
+                    return None
+            if isinstance(v, (date, datetime)):
+                return v.date() if isinstance(v, datetime) else v
+            return None
+
+        earn = ex_div = None
+        if isinstance(cal, dict):
+            earn = _to_date(cal.get("Earnings Date"))
+            ex_div = _to_date(cal.get("Ex-Dividend Date"))
+        elif cal is not None and hasattr(cal, "columns") and not cal.empty:
+            if "Earnings Date" in cal.columns:
+                earn = _to_date(cal["Earnings Date"].iloc[0])
+
+        if earn:
+            days = (earn - date.today()).days
+            out["next_earnings_date"] = str(earn)
+            out["earnings_days_out"] = days
+            out["event_risk"] = (
+                "high"   if 0 <= days <= 7  else
+                "medium" if 0 <= days <= 21 else
+                "low"
+            )
+        if ex_div:
+            out["ex_div_date"] = str(ex_div)
+    except Exception:
+        return out or None
+    return out or None
+
+
 def _fetch_analyst_data(ticker: str, current_price: float | None) -> dict:
     try:
         import yfinance as yf
@@ -1344,12 +1396,14 @@ def analyze_stock_sync(
             result["sec_insider_transactions"] = []
             result["sec_insider_summary"]      = None
             result["sec_recent_filings"]       = []
+        result["catalysts"] = _fetch_catalysts(ticker)
     else:
         result["analyst"] = None
         result["institutional"] = None
         result["sec_insider_transactions"] = []
         result["sec_insider_summary"]      = None
         result["sec_recent_filings"]       = []
+        result["catalysts"] = None
 
     if include_peers:
         result["peer_comparison"] = _fetch_peers(ticker)

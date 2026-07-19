@@ -1452,6 +1452,17 @@ function DecisionSummary({ result, onRefresh, currency = '$' }: { result: StockA
           <div className="mt-2 flex items-center gap-3 flex-wrap">
             <WatchlistButton ticker={result.ticker} />
             <CacheBadge result={result} onRefresh={onRefresh} />
+            {result.catalysts?.earnings_days_out != null && result.catalysts.earnings_days_out >= 0 && result.catalysts.earnings_days_out <= 21 && (
+              <span
+                className={clsx('text-xs font-semibold px-2 py-0.5 rounded-full',
+                  result.catalysts.event_risk === 'high'
+                    ? 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400'
+                    : 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400')}
+                title={`Next earnings ${result.catalysts.next_earnings_date} — elevated event risk inside a short-term horizon`}
+              >
+                📅 Earnings in {result.catalysts.earnings_days_out}d
+              </span>
+            )}
           </div>
         </div>
         <div className="text-center shrink-0">

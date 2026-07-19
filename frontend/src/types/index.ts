@@ -466,6 +466,14 @@ export interface StockAnalysisResult {
   financial_health?: FinancialHealth | null
   valuation?: Valuation | null
   trade_plan?: TradePlan | null
+  catalysts?: Catalysts | null
+}
+
+export interface Catalysts {
+  next_earnings_date?: string | null
+  earnings_days_out?: number | null
+  event_risk?: 'high' | 'medium' | 'low' | null
+  ex_div_date?: string | null
 }
 
 export interface Valuation {

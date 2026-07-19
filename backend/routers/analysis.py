@@ -403,6 +403,13 @@ Momentum {_fp('momentum')} | Value {_fp('value')} | Quality {_fp('quality')} | G
         if hp:
             brief += "\n\n=== FINANCIAL HEALTH ===\n" + "   ".join(hp)
 
+    cat = body.get("catalysts") or {}
+    if cat.get("earnings_days_out") is not None:
+        d = cat["earnings_days_out"]
+        if 0 <= d <= 21:
+            brief += (f"\n\n=== EVENT RISK ===\nNext earnings in {d} days ({cat.get('next_earnings_date')}). "
+                      "Treat the short-term call cautiously around this binary event.")
+
     prompt = f"""{brief}
 
 ---
