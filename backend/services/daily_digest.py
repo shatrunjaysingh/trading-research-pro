@@ -111,6 +111,7 @@ def _score_ticker_for_digest(
             "lt_reasoning":  lt["reasoning"] if lt else [],
             "_signal_row":   {"ticker": ticker, **row},
             "_exposures":    exposures,
+            "_fdata":        fdata,
         }
     except Exception as exc:
         logger.debug("Digest scoring failed for %s: %s", ticker, exc)
@@ -185,32 +186,63 @@ def run_daily_digest(force: bool = False) -> dict:
         except Exception as exc:
             logger.warning("Signal history bulk upsert failed: %s", exc)
 
-        # Compute + persist the day's cross-sectional factor distribution, which
-        # single-stock analysis ranks each ticker against (institutional-style).
+        # Compute + persist the day's cross-sectional factor distribution, then
+        # score every ticker on the SAME institutional engine the analysis page
+        # uses (composite + distress guardrails), ranked within today's universe.
+        universe_stats = None
         try:
             from backend.services.factor_engine import accumulate_universe_stats
             exp_rows = [s["_exposures"] for s in scored if s.get("_exposures")]
             if len(exp_rows) >= 10:
-                stats = accumulate_universe_stats(exp_rows)
-                db.save_factor_universe_stats(today, stats, len(exp_rows))
+                universe_stats = accumulate_universe_stats(exp_rows)
+                db.save_factor_universe_stats(today, universe_stats, len(exp_rows))
                 logger.info("Saved factor universe stats over %d stocks", len(exp_rows))
         except Exception as exc:
             logger.warning("Factor universe stats save failed: %s", exc)
 
-        # Top 5 short-term: high ST score + RS > 65 + positive day change preferred
+        try:
+            from backend.services import factor_engine as fe
+            for s in scored:
+                fd = s.get("_fdata")
+                if not fd:
+                    continue
+                fa = fe.analyze(fd, universe_stats=universe_stats)
+                s["composite"] = fa.get("composite")
+                s["distressed"] = bool(fa.get("guardrail_caps"))
+        except Exception as exc:
+            logger.warning("Digest factor scoring failed: %s", exc)
+
+        # A pick must clear the factor composite AND not be financially distressed —
+        # the digest will never surface a distressed momentum name as a "top pick".
+        def _quality_ok(s: dict) -> bool:
+            if s.get("distressed"):
+                return False
+            comp = s.get("composite")
+            return comp is None or comp >= 50
+
+        # Top 5 short-term: momentum + RS, gated by composite quality & distress.
         st_eligible = [
             s for s in scored
-            if s["st_score"] >= 60 and s.get("rs_score", 0) >= 65
+            if _quality_ok(s) and s["st_score"] >= 60 and s.get("rs_score", 0) >= 65
         ]
-        st_eligible.sort(key=lambda x: x["st_score"] * 0.6 + x["rs_score"] * 0.4, reverse=True)
+        st_eligible.sort(
+            key=lambda x: (x.get("composite") or x["st_score"]) * 0.4
+                          + x["st_score"] * 0.35 + x["rs_score"] * 0.25,
+            reverse=True,
+        )
         top_st = st_eligible[:5]
 
-        # Top 5 long-term: high LT score + RS > 60
+        # Top 5 long-term: LT quality + RS, gated by composite quality & distress.
         lt_eligible = [
             s for s in scored
-            if s.get("lt_score") is not None and s["lt_score"] >= 60 and s.get("rs_score", 0) >= 60
+            if _quality_ok(s) and s.get("lt_score") is not None
+            and s["lt_score"] >= 60 and s.get("rs_score", 0) >= 60
         ]
-        lt_eligible.sort(key=lambda x: (x["lt_score"] or 0) * 0.5 + x["rs_score"] * 0.5, reverse=True)
+        lt_eligible.sort(
+            key=lambda x: (x.get("composite") or x["lt_score"] or 0) * 0.4
+                          + (x["lt_score"] or 0) * 0.35 + x["rs_score"] * 0.25,
+            reverse=True,
+        )
         top_lt = lt_eligible[:5]
 
         logger.info("ST picks: %s", [p["ticker"] for p in top_st])
