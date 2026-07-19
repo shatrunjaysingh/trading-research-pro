@@ -483,6 +483,15 @@ Return ONLY valid JSON in this exact schema (no markdown, no extra text):
         raise HTTPException(status_code=500, detail=str(exc))
 
 
+@router.get("/evidence")
+async def rating_evidence(current_user: dict = Depends(get_current_user)):
+    """Forward-return + win-rate by rating bucket — proof the rating has an edge."""
+    if not auth_module.has_permission(current_user, "research"):
+        raise HTTPException(status_code=403, detail="Research permission required.")
+    from database import get_rating_bucket_stats
+    return get_rating_bucket_stats()
+
+
 @router.get("/snapshot")
 async def stock_snapshot(
     ticker: str,

@@ -108,6 +108,9 @@ export const apiGetPriceHistory = (ticker: string, period = '6mo') =>
 export const apiGetVerdict = (result: StockAnalysisResult) =>
   client.post('/analysis/verdict', result, { timeout: 45_000 }).then(r => r.data)
 
+export const apiGetEvidence = () =>
+  client.get<import('../types').RatingEvidence>('/analysis/evidence').then(r => r.data)
+
 export async function* streamStockAnalysis(
   params: StockAnalysisRequest,
 ): AsyncGenerator<StockSSEEvent> {

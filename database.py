@@ -1390,6 +1390,59 @@ def get_track_record_scores(min_picks: int = 3, lookback_days: int = 90) -> dict
         return {}
 
 
+def get_rating_bucket_stats(lookback_days: int = 730) -> dict:
+    """
+    Forward-return evidence by rating bucket, from logged picks with filled
+    returns. Shows whether higher composite ratings actually earned better
+    returns — the edge, verified. Returns {buckets: [...], spread, n}.
+    """
+    buckets_sql = """
+        SELECT
+          CASE WHEN score >= 65 THEN '65+'
+               WHEN score >= 52 THEN '52-64'
+               WHEN score >= 38 THEN '38-51'
+               ELSE '<38' END                                    AS bucket,
+          COUNT(*)                                               AS n,
+          AVG(return_5d_pct)                                     AS avg_5d,
+          AVG(return_30d_pct)                                    AS avg_30d,
+          SUM(CASE WHEN return_30d_pct > 0 THEN 1 ELSE 0 END)::float
+            / NULLIF(SUM(CASE WHEN return_30d_pct IS NOT NULL THEN 1 ELSE 0 END), 0) AS win_30d
+        FROM backtest_picks
+        WHERE score IS NOT NULL
+          AND (return_5d_pct IS NOT NULL OR return_30d_pct IS NOT NULL)
+          AND run_date >= CURRENT_DATE - (%s * INTERVAL '1 day')
+        GROUP BY bucket
+    """
+    order = {"65+": 0, "52-64": 1, "38-51": 2, "<38": 3}
+    try:
+        with get_db() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(buckets_sql, (lookback_days,))
+                rows = [dict(r) for r in cur.fetchall()]
+        if not rows:
+            return {"buckets": [], "n": 0, "spread_30d": None}
+
+        def f(v):
+            return round(float(v), 2) if v is not None else None
+
+        buckets = sorted(
+            [{
+                "bucket":  r["bucket"],
+                "n":       int(r["n"]),
+                "avg_5d":  f(r["avg_5d"]),
+                "avg_30d": f(r["avg_30d"]),
+                "win_30d": round(float(r["win_30d"]) * 100, 1) if r["win_30d"] is not None else None,
+            } for r in rows],
+            key=lambda b: order.get(b["bucket"], 9),
+        )
+        top = next((b["avg_30d"] for b in buckets if b["bucket"] == "65+"), None)
+        bot = next((b["avg_30d"] for b in buckets if b["bucket"] == "<38"), None)
+        spread = round(top - bot, 2) if (top is not None and bot is not None) else None
+        return {"buckets": buckets, "n": sum(b["n"] for b in buckets), "spread_30d": spread}
+    except Exception:
+        return {"buckets": [], "n": 0, "spread_30d": None}
+
+
 # ---------------------------------------------------------------------------
 # Watchlist CRUD
 # ---------------------------------------------------------------------------

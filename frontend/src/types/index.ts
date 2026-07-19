@@ -476,6 +476,20 @@ export interface Catalysts {
   ex_div_date?: string | null
 }
 
+export interface RatingBucket {
+  bucket: string
+  n: number
+  avg_5d: number | null
+  avg_30d: number | null
+  win_30d: number | null
+}
+
+export interface RatingEvidence {
+  buckets: RatingBucket[]
+  n: number
+  spread_30d: number | null
+}
+
 export interface Valuation {
   fair_value: number
   fv_low: number

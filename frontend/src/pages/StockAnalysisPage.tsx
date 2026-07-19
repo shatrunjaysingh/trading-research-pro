@@ -8,7 +8,7 @@ import {
 import { useAuthStore } from '../store/auth'
 import { useMarketStore, useActiveExchanges } from '../store/market'
 import { COUNTRIES, formatTicker } from '../types/markets'
-import { streamStockAnalysis, fetchStockHistory, streamStockChat, ChatMsg, apiGetPriceHistory, fetchStockSnapshot, apiGetVerdict } from '../api/analysis'
+import { streamStockAnalysis, fetchStockHistory, streamStockChat, ChatMsg, apiGetPriceHistory, fetchStockSnapshot, apiGetVerdict, apiGetEvidence } from '../api/analysis'
 import { apiAddToWatchlist, apiRemoveFromWatchlist, apiCheckWatchlist } from '../api/watchlist'
 import {
   StockAnalysisResult, TechnicalSnapshot, FundamentalSnapshot,
@@ -1594,6 +1594,62 @@ function AnalysisDetail({ result }: { result: StockAnalysisResult }) {
   )
 }
 
+// ── Evidence: does the rating actually predict returns? ───────────────────────
+
+function EvidencePanel() {
+  const { data, isLoading } = useQuery({
+    queryKey: ['rating-evidence'],
+    queryFn: apiGetEvidence,
+    staleTime: 30 * 60 * 1000,
+  })
+
+  if (isLoading) return <div className="text-xs text-ink-faint">Loading track record…</div>
+  if (!data || !data.buckets.length) {
+    return (
+      <p className="text-xs text-ink-muted leading-relaxed">
+        No filled backtest history yet. As the daily screen runs and forward returns accrue,
+        this will show whether higher ratings actually earned better 30-day returns — the rating's edge, verified on your own data.
+      </p>
+    )
+  }
+  const retColor = (v: number | null) => v == null ? 'text-ink-faint' : v > 0 ? 'text-green-600 dark:text-green-400' : 'text-red-500 dark:text-red-400'
+  return (
+    <div className="space-y-3">
+      <div className="overflow-x-auto">
+        <table className="w-full text-xs">
+          <thead>
+            <tr className="text-ink-faint border-b border-surface-border">
+              <th className="text-left py-1.5 font-medium">Rating bucket</th>
+              <th className="text-right py-1.5 font-medium">Picks</th>
+              <th className="text-right py-1.5 font-medium">Avg 5d</th>
+              <th className="text-right py-1.5 font-medium">Avg 30d</th>
+              <th className="text-right py-1.5 font-medium">Win 30d</th>
+            </tr>
+          </thead>
+          <tbody>
+            {data.buckets.map(b => (
+              <tr key={b.bucket} className="border-b border-surface-border/40 last:border-0">
+                <td className="py-1.5 font-semibold text-ink">{b.bucket}</td>
+                <td className="py-1.5 text-right text-ink-muted">{b.n}</td>
+                <td className={clsx('py-1.5 text-right font-medium', retColor(b.avg_5d))}>{b.avg_5d != null ? `${b.avg_5d > 0 ? '+' : ''}${b.avg_5d}%` : '—'}</td>
+                <td className={clsx('py-1.5 text-right font-medium', retColor(b.avg_30d))}>{b.avg_30d != null ? `${b.avg_30d > 0 ? '+' : ''}${b.avg_30d}%` : '—'}</td>
+                <td className="py-1.5 text-right text-ink">{b.win_30d != null ? `${b.win_30d}%` : '—'}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {data.spread_30d != null && (
+        <p className="text-[11px] text-ink-faint">
+          Top-vs-bottom bucket spread over 30 days: <strong className={retColor(data.spread_30d)}>{data.spread_30d > 0 ? '+' : ''}{data.spread_30d}%</strong>
+          {data.spread_30d > 0 ? ' — higher ratings have outperformed lower ones.' : ' — no positive edge in this window yet.'}
+          {' '}Based on {data.n} logged picks with realized returns. Past performance ≠ future results.
+        </p>
+      )}
+    </div>
+  )
+}
+
 // ── Valuation & Trade Plan ────────────────────────────────────────────────────
 
 const VAL_VERDICT_STYLE: Record<string, string> = {
@@ -2781,6 +2837,11 @@ export function StockAnalysisPage() {
                 <AnalysisDetail result={result} />
               </Section>
             )}
+
+            {/* Evidence — does the rating actually predict returns? */}
+            <Section title="Track record" subtitle="does the rating actually predict returns?">
+              <EvidencePanel />
+            </Section>
 
             {/* Final Verdict — admin-only AI judgement with price targets */}
             {isAdmin && (result.st_analysis || result.lt_analysis) && (
