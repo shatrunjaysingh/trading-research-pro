@@ -475,7 +475,9 @@ def init_db() -> None:
 def get_user_by_email(email: str) -> dict | None:
     with get_db() as conn:
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-        cur.execute("SELECT * FROM users WHERE email = %s", (email,))
+        # Case-insensitive match so users created with a mixed-case email
+        # (stored as-is by older code) can still sign in.
+        cur.execute("SELECT * FROM users WHERE LOWER(email) = %s", (email.strip().lower(),))
         return _row_to_dict(cur.fetchone())
 
 
@@ -505,6 +507,10 @@ def create_user(
 ) -> dict:
     """Create a new user. Raises ValueError on duplicate email/username."""
     from datetime import timezone as _tz
+    # Store the email normalized (lowercased) — login looks it up in lowercase,
+    # so a mixed-case email here would otherwise never match at sign-in.
+    email = email.strip().lower()
+    username = username.strip()
     pwd_hash = hash_password(password)
     consent_at = datetime.now(_tz.utc) if consent else None
     try:
